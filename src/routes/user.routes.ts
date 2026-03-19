@@ -14,7 +14,7 @@ const router = express.Router();
 
 /**
  * @swagger
- * /user:
+ * /api/users:
  *   get:
  *     summary: Get all users
  *     tags: [Users]
@@ -26,7 +26,7 @@ router.get("/", userController.getAllUsers);
 
 /**
  * @swagger
- * /user/profile:
+ * /api/users/profile:
  *   get:
  *     summary: Get current user profile
  *     tags: [Users]
@@ -42,7 +42,7 @@ router.get("/profile", authMiddleware, userController.getProfile);
 
 /**
  * @swagger
- * /user/{id}:
+ * /api/users/{id}:
  *   get:
  *     summary: Get user by ID
  *     tags: [Users]
@@ -62,7 +62,7 @@ router.get("/:id", userController.getUserById);
 
 /**
  * @swagger
- * /user/{id}:
+ * /api/users/{id}:
  *   put:
  *     summary: Update user
  *     tags: [Users]
@@ -77,14 +77,15 @@ router.get("/:id", userController.getUserById);
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             properties:
  *               username:
  *                 type: string
- *               email:
+ *               image:
  *                 type: string
+ *                 format: binary
  *     responses:
  *       200:
  *         description: User updated successfully
@@ -102,7 +103,7 @@ router.put(
 
 /**
  * @swagger
- * /user/{id}:
+ * /api/users/{id}:
  *   delete:
  *     summary: Delete user
  *     tags: [Users]

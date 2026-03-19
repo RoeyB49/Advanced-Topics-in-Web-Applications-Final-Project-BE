@@ -12,7 +12,7 @@ const router = express.Router();
 
 /**
  * @swagger
- * /auth/register:
+ * /api/auth/register:
  *   post:
  *     summary: Register a new user
  *     tags: [Auth]
@@ -43,7 +43,7 @@ router.post("/register", authController.register);
 
 /**
  * @swagger
- * /auth/login:
+ * /api/auth/login:
  *   post:
  *     summary: Login user
  *     tags: [Auth]
@@ -68,11 +68,45 @@ router.post("/register", authController.register);
  *         description: Invalid credentials
  */
 router.post("/login", authController.login);
+
+/**
+ * @swagger
+ * /api/auth/social:
+ *   post:
+ *     summary: Login/register using external provider
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - provider
+ *               - providerId
+ *               - email
+ *               - username
+ *             properties:
+ *               provider:
+ *                 type: string
+ *                 enum: [google, facebook]
+ *               providerId:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               username:
+ *                 type: string
+ *               profileImage:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Social login successful
+ */
 router.post("/social", authController.socialAuth);
 
 /**
  * @swagger
- * /auth/logout:
+ * /api/auth/logout:
  *   post:
  *     summary: Logout user
  *     tags: [Auth]
@@ -97,7 +131,7 @@ router.post("/logout", authController.logout);
 
 /**
  * @swagger
- * /auth/refresh:
+ * /api/auth/refresh:
  *   post:
  *     summary: Refresh access token
  *     tags: [Auth]
