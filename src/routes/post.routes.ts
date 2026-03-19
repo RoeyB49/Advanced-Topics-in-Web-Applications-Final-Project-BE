@@ -13,6 +13,7 @@ const router = express.Router();
  */
 
 router.get("/", postController.getAllPosts);
+router.get("/me", authMiddleware, postController.getMyPosts);
 router.post(
   "/",
   authMiddleware,

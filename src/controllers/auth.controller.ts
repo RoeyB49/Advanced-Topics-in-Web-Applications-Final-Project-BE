@@ -19,6 +19,25 @@ const generateTokens = (userId: string) => {
   return { accessToken, refreshToken };
 };
 
+const saveAndRespondWithTokens = async (user: IUser, res: Response, status = 200) => {
+  const { accessToken, refreshToken } = generateTokens(user._id.toString());
+  user.refreshTokens.push(refreshToken);
+  await user.save();
+
+  res.status(status).json({
+    message: status === 201 ? "User registered successfully" : "Login successful",
+    user: {
+      _id: user._id,
+      username: user.username,
+      email: user.email,
+      profileImage: user.profileImage || "",
+      provider: user.provider || "local"
+    },
+    accessToken,
+    refreshToken
+  });
+};
+
 /**
  * Register a new user
  */
@@ -49,23 +68,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       password: hashedPassword,
     }) as IUser;
 
-    // Generate tokens
-    const { accessToken, refreshToken } = generateTokens(user._id.toString());
-
-    // Save refresh token
-    user.refreshTokens.push(refreshToken);
-    await user.save();
-
-    res.status(201).json({
-      message: "User registered successfully",
-      user: {
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-      },
-      accessToken,
-      refreshToken,
-    });
+    await saveAndRespondWithTokens(user, res, 201);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
@@ -92,29 +95,57 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await bcrypt.compare(password, user.password || "");
     if (!isPasswordValid) {
       res.status(401).json({ message: "Invalid credentials" });
       return;
     }
 
-    // Generate tokens
-    const { accessToken, refreshToken } = generateTokens((user as IUser)._id.toString());
+    await saveAndRespondWithTokens(user as IUser, res, 200);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
-    // Save refresh token
-    user.refreshTokens.push(refreshToken);
-    await user.save();
+/**
+ * Social auth login/register (backend integration point)
+ */
+export const socialAuth = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { provider, providerId, email, username, profileImage } = req.body;
 
-    res.status(200).json({
-      message: "Login successful",
-      user: {
-        _id: user._id,
-        username: user.username,
-        email: user.email,
-      },
-      accessToken,
-      refreshToken,
-    });
+    if (!["google", "facebook"].includes(provider)) {
+      res.status(400).json({ message: "provider must be google or facebook" });
+      return;
+    }
+
+    if (!providerId || !email || !username) {
+      res.status(400).json({ message: "providerId, email and username are required" });
+      return;
+    }
+
+    let user = (await User.findOne({
+      $or: [{ provider, providerId }, { email }]
+    })) as IUser | null;
+
+    if (!user) {
+      user = (await User.create({
+        username,
+        email,
+        profileImage: profileImage || "",
+        provider,
+        providerId,
+        refreshTokens: []
+      })) as IUser;
+    } else {
+      user.provider = provider;
+      user.providerId = providerId;
+      if (profileImage && !user.profileImage) {
+        user.profileImage = profileImage;
+      }
+    }
+
+    await saveAndRespondWithTokens(user, res, 200);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }

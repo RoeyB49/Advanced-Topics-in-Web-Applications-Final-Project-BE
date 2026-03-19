@@ -4,7 +4,10 @@ export interface IUser extends Document {
   _id: Types.ObjectId;
   username: string;
   email: string;
-  password: string;
+  password?: string;
+  profileImage?: string;
+  provider?: "local" | "google" | "facebook";
+  providerId?: string;
   refreshTokens: string[];
 }
 
@@ -27,8 +30,20 @@ const userSchema = new Schema<IUser>(
     },
     password: {
       type: String,
-      required: true,
       minlength: 6
+    },
+    profileImage: {
+      type: String,
+      default: ""
+    },
+    provider: {
+      type: String,
+      enum: ["local", "google", "facebook"],
+      default: "local"
+    },
+    providerId: {
+      type: String,
+      default: ""
     },
     refreshTokens: {
       type: [String],

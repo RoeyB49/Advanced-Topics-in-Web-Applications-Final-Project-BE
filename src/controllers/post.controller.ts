@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import Post from "../models/post.model";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { searchPosts as searchPostsWithAI } from "../services/ai.service";
+import Comment from "../models/comment.model";
 
 /**
  * @swagger
@@ -35,20 +36,70 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 10;
     const skip = (page - 1) * limit;
+    const author = req.query.author as string | undefined;
 
-    const posts = await Post.find()
+    const filter: Record<string, string> = {};
+    if (author) {
+      filter.author = author;
+    }
+
+    const posts = await Post.find(filter)
       .populate("author", "username profileImage")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    const totalPosts = await Post.countDocuments();
+    const postsWithCounts = await Promise.all(
+      posts.map(async (post) => {
+        const commentsCount = await Comment.countDocuments({ post: post._id });
+        return {
+          ...post.toObject(),
+          commentsCount,
+          likesCount: post.likes.length
+        };
+      })
+    );
+
+    const totalPosts = await Post.countDocuments(filter);
 
     res.status(200).json({
-      posts,
+      posts: postsWithCounts,
       totalPages: Math.ceil(totalPosts / limit),
       currentPage: page,
     });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getMyPosts = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  try {
+    const userId = req.user?._id;
+
+    if (!userId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+
+    const posts = await Post.find({ author: userId })
+      .populate("author", "username profileImage")
+      .sort({ createdAt: -1 });
+
+    const postsWithCounts = await Promise.all(
+      posts.map(async (post) => {
+        const commentsCount = await Comment.countDocuments({ post: post._id });
+        return {
+          ...post.toObject(),
+          commentsCount,
+          likesCount: post.likes.length
+        };
+      })
+    );
+
+    res.status(200).json(postsWithCounts);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }

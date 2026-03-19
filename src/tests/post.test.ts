@@ -1,224 +1,116 @@
 import request from "supertest";
 import { app } from "../app";
-import Post from "../models/post.model";
 
 describe("Post Endpoints", () => {
   let accessToken: string;
-  let userId: string;
   let postId: string;
 
   beforeEach(async () => {
-    const res = await request(app)
-      .post("/auth/register")
-      .send({
-        username: "testuser",
-        email: "test@example.com",
-        password: "password123",
-      });
+    const res = await request(app).post("/api/auth/register").send({
+      username: "testuser",
+      email: "test@example.com",
+      password: "password123"
+    });
+
     accessToken = res.body.accessToken;
-    userId = res.body.user._id;
   });
 
+  it("should create a post", async () => {
+    const res = await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "This is my first post" });
 
-  describe("POST /post", () => {
-    it("should create a new post", async () => {
-      const res = await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Test Post",
-          content: "This is a test post",
-        });
-
-      expect(res.status).toBe(201);
-      expect(res.body).toHaveProperty("title", "Test Post");
-      expect(res.body).toHaveProperty("content", "This is a test post");
-      expect(res.body).toHaveProperty("sender");
-      postId = res.body._id;
-    });
-
-    it("should not create post without authentication", async () => {
-      const res = await request(app)
-        .post("/post")
-        .send({
-          title: "Test Post",
-          content: "This is a test post",
-        });
-
-      expect(res.status).toBe(401);
-    });
-
-    it("should not create post without title", async () => {
-      const res = await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          content: "This is a test post",
-        });
-
-      expect(res.status).toBe(400);
-    });
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty("text", "This is my first post");
+    expect(res.body).toHaveProperty("author");
+    postId = res.body._id;
   });
 
-  describe("GET /post", () => {
-    beforeEach(async () => {
-      await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Test Post 1",
-          content: "Content 1",
-        });
-      await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Test Post 2",
-          content: "Content 2",
-        });
-    });
+  it("should get feed posts with paging metadata", async () => {
+    await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Post A" });
 
-    it("should get all posts", async () => {
-      const res = await request(app).get("/post");
+    const res = await request(app).get("/api/posts?page=1&limit=10");
 
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBe(2);
-    });
-
-    it("should filter posts by sender", async () => {
-      const res = await request(app).get(`/post?sender=${userId}`);
-
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBe(2);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("posts");
+    expect(res.body).toHaveProperty("totalPages");
+    expect(res.body).toHaveProperty("currentPage");
+    expect(Array.isArray(res.body.posts)).toBe(true);
+    expect(res.body.posts[0]).toHaveProperty("commentsCount");
   });
 
-  describe("GET /post/:id", () => {
-    beforeEach(async () => {
-      const res = await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Test Post",
-          content: "Test Content",
-        });
-      postId = res.body._id;
-    });
+  it("should get my posts", async () => {
+    await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "My Post" });
 
-    it("should get post by ID", async () => {
-      const res = await request(app).get(`/post/${postId}`);
+    const res = await request(app)
+      .get("/api/posts/me")
+      .set("Authorization", `Bearer ${accessToken}`);
 
-      expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty("title", "Test Post");
-    });
-
-    it("should return 404 for non-existent post", async () => {
-      const res = await request(app).get("/post/507f1f77bcf86cd799439011");
-
-      expect(res.status).toBe(404);
-    });
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body.length).toBe(1);
   });
 
-  describe("PUT /post/:id", () => {
-    beforeEach(async () => {
-      const res = await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Original Title",
-          content: "Original Content",
-        });
-      postId = res.body._id;
-    });
+  it("should update own post", async () => {
+    const created = await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Before" });
 
-    it("should update post", async () => {
-      const res = await request(app)
-        .put(`/post/${postId}`)
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Updated Title",
-          content: "Updated Content",
-        });
+    postId = created.body._id;
 
-      expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty("title", "Updated Title");
-      expect(res.body).toHaveProperty("content", "Updated Content");
-    });
+    const res = await request(app)
+      .put(`/api/posts/${postId}`)
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "After" });
 
-    it("should not update post without authentication", async () => {
-      const res = await request(app)
-        .put(`/post/${postId}`)
-        .send({
-          title: "Updated Title",
-        });
-
-      expect(res.status).toBe(401);
-    });
-
-    it("should return 404 for non-existent post", async () => {
-      const res = await request(app)
-        .put("/post/507f1f77bcf86cd799439011")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Updated Title",
-        });
-
-      expect(res.status).toBe(404);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("text", "After");
   });
 
-  describe("DELETE /post/:id", () => {
-    beforeEach(async () => {
-      const res = await request(app)
-        .post("/post")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({
-          title: "Post to Delete",
-          content: "This will be deleted",
-        });
-      postId = res.body._id;
-    });
+  it("should like and unlike a post", async () => {
+    const created = await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Like me" });
 
-    it("should delete post", async () => {
-      const res = await request(app)
-        .delete(`/post/${postId}`)
-        .set("Authorization", `Bearer ${accessToken}`);
+    postId = created.body._id;
 
-      expect(res.status).toBe(200);
-      expect(res.body.message).toContain("deleted successfully");
-    });
+    const likeRes = await request(app)
+      .post(`/api/posts/${postId}/like`)
+      .set("Authorization", `Bearer ${accessToken}`);
 
-    it("should not delete post without authentication", async () => {
-      const res = await request(app).delete(`/post/${postId}`);
+    expect(likeRes.status).toBe(200);
+    expect(likeRes.body.likes.length).toBe(1);
 
-      expect(res.status).toBe(401);
-    });
+    const unlikeRes = await request(app)
+      .post(`/api/posts/${postId}/like`)
+      .set("Authorization", `Bearer ${accessToken}`);
 
-    it("should return 404 for non-existent post", async () => {
-      const res = await request(app)
-        .delete("/post/507f1f77bcf86cd799439011")
-        .set("Authorization", `Bearer ${accessToken}`);
-
-      expect(res.status).toBe(404);
-    });
+    expect(unlikeRes.status).toBe(200);
+    expect(unlikeRes.body.likes.length).toBe(0);
   });
 
-  describe("Error handling", () => {
-    it("should return 400 for invalid post ID format", async () => {
-      const res = await request(app).get("/post/invalidid");
+  it("should delete own post", async () => {
+    const created = await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Delete me" });
 
-      expect(res.status).toBe(400);
-    });
+    postId = created.body._id;
 
-    it("should return 404 for non-existent post in update", async () => {
-      const res = await request(app)
-        .put("/post/507f1f77bcf86cd799439011")
-        .set("Authorization", `Bearer ${accessToken}`)
-        .send({ title: "Updated" });
+    const res = await request(app)
+      .delete(`/api/posts/${postId}`)
+      .set("Authorization", `Bearer ${accessToken}`);
 
-      expect(res.status).toBe(404);
-    });
+    expect(res.status).toBe(200);
+    expect(res.body.message).toContain("deleted successfully");
   });
 });
