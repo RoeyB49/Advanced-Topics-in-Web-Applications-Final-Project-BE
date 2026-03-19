@@ -99,6 +99,9 @@ dist
 # results of yarn install
 .yarn/install-state.gz
 
+# VS Code settings
+.vscode/
+
 # SvelteKit build output
 .svelte-kit
 
