@@ -1,27 +1,37 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IPost extends Document {
-  title: string;
-  content: string;
-  sender: mongoose.Types.ObjectId;
+  text: string;
+  imageUrl?: string;
+  author: mongoose.Types.ObjectId;
+  likes: mongoose.Types.ObjectId[];
 }
 
-const postSchema = new Schema<IPost>({
-  title: { 
-    type: String, 
-    required: true 
+const postSchema = new Schema<IPost>(
+  {
+    text: {
+      type: String,
+      required: true,
+    },
+    imageUrl: {
+      type: String,
+    },
+    author: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    likes: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
   },
-  content: { 
-    type: String 
-  },
-  sender: { 
-    type: Schema.Types.ObjectId,
-    ref: "User",
-    required: true 
-  },
-}, {
-  timestamps: true
-});
+  {
+    timestamps: true,
+  }
+);
 
 const Post = mongoose.model<IPost>("Post", postSchema);
 
