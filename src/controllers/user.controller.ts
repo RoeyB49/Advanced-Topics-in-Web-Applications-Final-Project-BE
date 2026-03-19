@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import User, { IUser } from "../models/user.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+import Post from "../models/post.model";
 
 /**
  * Get all users
@@ -24,7 +25,11 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
       res.status(404).json({ message: "User not found" });
       return;
     }
-    res.status(200).json(user);
+    const posts = await Post.find({ author: user._id })
+      .sort({ createdAt: -1 })
+      .populate("author", "username profileImage");
+
+    res.status(200).json({ user, posts });
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
@@ -36,7 +41,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
 export const updateUser = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const userId = req.params.id;
-    const { username, email } = req.body;
+    const { username } = req.body;
 
     // Check if user is updating their own profile
     if (req.user && (req.user as IUser)._id.toString() !== userId) {
@@ -44,11 +49,18 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       return;
     }
 
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      { username, email },
-      { new: true, runValidators: true }
-    ).select("-password -refreshTokens");
+    const updateData: Record<string, string> = {};
+    if (username) {
+      updateData.username = username;
+    }
+    if (req.file) {
+      updateData.profileImage = `/uploads/profiles/${req.file.filename}`;
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updateData, {
+      new: true,
+      runValidators: true
+    }).select("-password -refreshTokens");
 
     if (!updatedUser) {
       res.status(404).json({ message: "User not found" });
@@ -96,7 +108,12 @@ export const getProfile = async (req: AuthRequest, res: Response): Promise<void>
       res.status(404).json({ message: "User not found" });
       return;
     }
-    res.status(200).json(user);
+
+    const posts = await Post.find({ author: user._id })
+      .sort({ createdAt: -1 })
+      .populate("author", "username profileImage");
+
+    res.status(200).json({ user, posts });
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
