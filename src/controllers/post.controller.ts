@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import Post from "../models/post.model";
 import { AuthRequest } from "../middleware/auth.middleware";
+import { searchPosts as searchPostsWithAI } from "../services/ai.service";
 
 /**
  * @swagger
@@ -37,14 +38,6 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
 
     const posts = await Post.find()
       .populate("author", "username profileImage")
-      .populate({
-        path: 'comments',
-        select: 'text',
-        populate: {
-          path: 'author',
-          select: 'username'
-        }
-      })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -144,14 +137,7 @@ export const getPostById = async (
 ): Promise<void> => {
   try {
     const post = await Post.findById(req.params.id)
-      .populate("author", "username profileImage")
-      .populate({
-        path: 'comments',
-        populate: {
-          path: 'author',
-          select: 'username profileImage'
-        }
-      });
+      .populate("author", "username profileImage");
     if (!post) {
       res.status(404).json({ message: "Post not found" });
       return;
@@ -314,7 +300,9 @@ export const likePost = async (
       return;
     }
 
-    const likedIndex = post.likes.indexOf(userId);
+    const likedIndex = post.likes.findIndex(
+      (likeUserId) => likeUserId.toString() === userId.toString()
+    );
 
     if (likedIndex === -1) {
       // Like the post
@@ -326,6 +314,39 @@ export const likePost = async (
 
     await post.save();
     res.status(200).json(post);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * @swagger
+ * /api/posts/search:
+ *   get:
+ *     summary: Search for posts using a natural language query
+ *     tags: [Posts]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The natural language search query
+ *     responses:
+ *       200:
+ *         description: A list of posts that match the search query
+ *       500:
+ *         description: Internal server error
+ */
+export const searchPosts = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const query = req.query.q as string;
+    if (!query) {
+      res.status(400).json({ message: "Search query is required" });
+      return;
+    }
+    const posts = await searchPostsWithAI(query);
+    res.status(200).json(posts);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
