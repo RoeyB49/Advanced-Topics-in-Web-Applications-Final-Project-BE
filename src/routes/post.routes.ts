@@ -13,6 +13,21 @@ const router = express.Router();
  */
 
 router.get("/", postController.getAllPosts);
+
+/**
+ * @swagger
+ * /api/posts/me:
+ *   get:
+ *     summary: Get posts of current logged-in user
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current user's posts list
+ *       401:
+ *         description: Unauthorized
+ */
 router.get("/me", authMiddleware, postController.getMyPosts);
 router.post(
   "/",
