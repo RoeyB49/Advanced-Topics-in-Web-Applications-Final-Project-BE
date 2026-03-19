@@ -1,0 +1,163 @@
+
+@baseUrl = http://localhost:3000
+@accessToken = 
+@refreshToken = 
+@userId = 
+@postId = 
+@commentId = 
+
+# AUTHENTICATION ENDPOINTS
+
+### Register a new user
+# @name register
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "username": "john_doe",
+  "email": "john@example.com",
+  "password": "password123"
+}
+
+### Login user
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "john@example.com",
+  "password": "password123"
+}
+
+###
+@accessToken = {{login.response.body.accessToken}}
+@refreshToken = {{login.response.body.refreshToken}}
+@userId = {{login.response.body.user._id}}
+
+### Refresh access token
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+### Logout user
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{refreshToken}}"
+}
+
+# USER ENDPOINTS
+
+### Get all users
+GET {{baseUrl}}/user
+
+### Get current user profile (requires authentication)
+GET {{baseUrl}}/user/profile
+Authorization: Bearer {{accessToken}}
+
+### Get user by ID
+GET {{baseUrl}}/user/{{userId}}
+
+### Update user (requires authentication)
+PUT {{baseUrl}}/user/{{userId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "username": "john_updated",
+  "email": "john_updated@example.com"
+}
+
+### Delete user (requires authentication)
+DELETE {{baseUrl}}/user/{{userId}}
+Authorization: Bearer {{accessToken}}
+
+### POST ENDPOINTS
+
+### Create a new post (requires authentication)
+# @name createPost
+POST {{baseUrl}}/post
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "My First Post",
+  "content": "This is the content of my first post. It's amazing!"
+}
+
+###
+@postId = {{createPost.response.body._id}}
+
+### Get all posts
+GET {{baseUrl}}/post
+
+### Get posts by sender
+GET {{baseUrl}}/post?sender={{userId}}
+
+### Get post by ID
+GET {{baseUrl}}/post/{{postId}}
+
+### Update a post (requires authentication)
+PUT {{baseUrl}}/post/{{postId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "title": "Updated Post Title",
+  "content": "This is the updated content of my post."
+}
+
+### Delete a post (requires authentication)
+DELETE {{baseUrl}}/post/{{postId}}
+Authorization: Bearer {{accessToken}}
+
+# COMMENT ENDPOINTS
+
+### Create a new comment (requires authentication)
+# @name createComment
+POST {{baseUrl}}/comment
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "postId": "{{postId}}",
+  "content": "This is a great post! Thanks for sharing."
+}
+
+###
+@commentId = {{createComment.response.body._id}}
+
+### Get all comments
+GET {{baseUrl}}/comment
+
+### Get comments by post ID (query parameter)
+GET {{baseUrl}}/comment?postId={{postId}}
+
+### Get comments by post ID (path parameter)
+GET {{baseUrl}}/comment/posts/{{postId}}
+
+### Get comment by ID
+GET {{baseUrl}}/comment/{{commentId}}
+
+### Update a comment (requires authentication)
+PUT {{baseUrl}}/comment/{{commentId}}
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "content": "This is an updated comment."
+}
+
+### Delete a comment (requires authentication)
+DELETE {{baseUrl}}/comment/{{commentId}}
+Authorization: Bearer {{accessToken}}
+
+### Check API status
+GET {{baseUrl}}/
+
+#Swagger Documentation http://localhost:3000/api-docs
+
