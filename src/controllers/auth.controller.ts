@@ -3,6 +3,8 @@ import User, { IUser } from "../models/user.model";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import axios from "axios";
+import fs from "fs";
+import path from "path";
 import { OAuth2Client } from "google-auth-library";
 
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
@@ -112,6 +114,170 @@ const buildUniqueUsername = async (rawUsername: string) => {
   return candidate;
 };
 
+type Provider = "google" | "facebook";
+
+type SocialProfile = {
+  providerId: string;
+  email: string;
+  username: string;
+  profileImage?: string;
+};
+
+const resolveImageExtension = (contentType?: string, imageUrl?: string) => {
+  if (contentType) {
+    if (contentType.includes("image/png")) return ".png";
+    if (contentType.includes("image/webp")) return ".webp";
+    if (contentType.includes("image/gif")) return ".gif";
+    if (contentType.includes("image/jpeg") || contentType.includes("image/jpg")) {
+      return ".jpg";
+    }
+  }
+
+  if (imageUrl) {
+    try {
+      const ext = path.extname(new URL(imageUrl).pathname).toLowerCase();
+      if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) {
+        return ext === ".jpeg" ? ".jpg" : ext;
+      }
+    } catch {
+      // Ignore URL parsing failures and fall back to default extension.
+    }
+  }
+
+  return ".jpg";
+};
+
+const persistExternalProfileImage = async (
+  imageUrl: string | undefined,
+  provider: Provider,
+  providerId: string
+) => {
+  if (!imageUrl) {
+    return "";
+  }
+
+  if (imageUrl.startsWith("/uploads/")) {
+    return imageUrl;
+  }
+
+  if (!/^https?:\/\//i.test(imageUrl)) {
+    return "";
+  }
+
+  try {
+    const response = await axios.get<ArrayBuffer>(imageUrl, {
+      responseType: "arraybuffer",
+      timeout: 10000,
+    });
+
+    const uploadDir = path.resolve(process.cwd(), "uploads", "profiles");
+    fs.mkdirSync(uploadDir, { recursive: true });
+
+    const extension = resolveImageExtension(
+      response.headers["content-type"] as string | undefined,
+      imageUrl
+    );
+    const filename = `social-${provider}-${providerId}-${Date.now()}${extension}`;
+    const targetPath = path.join(uploadDir, filename);
+
+    fs.writeFileSync(targetPath, Buffer.from(response.data));
+
+    return `/uploads/profiles/${filename}`;
+  } catch (error) {
+    console.warn("Could not persist external social profile image", error);
+    return "";
+  }
+};
+
+const verifyGoogleToken = async (token: string): Promise<SocialProfile> => {
+  if (!GOOGLE_CLIENT_ID) {
+    throw new Error("Google login is not configured on the server");
+  }
+
+  const response = await axios.get("https://oauth2.googleapis.com/tokeninfo", {
+    params: {
+      id_token: token,
+    },
+  });
+
+  const payload = response.data;
+
+  if (payload?.aud !== GOOGLE_CLIENT_ID) {
+    throw new Error("Invalid Google token audience");
+  }
+
+  if (!payload?.sub || !payload?.email || !payload?.name) {
+    throw new Error("Invalid Google token payload");
+  }
+
+  return {
+    providerId: payload.sub,
+    email: payload.email,
+    username: payload.name,
+    profileImage: payload.picture,
+  };
+};
+
+const verifyFacebookToken = async (token: string): Promise<SocialProfile> => {
+  if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) {
+    throw new Error("Facebook login is not configured on the server");
+  }
+
+  const appAccessToken = `${FACEBOOK_APP_ID}|${FACEBOOK_APP_SECRET}`;
+
+  const debugResponse = await axios.get("https://graph.facebook.com/debug_token", {
+    params: {
+      input_token: token,
+      access_token: appAccessToken,
+    },
+  });
+
+  const debugData = debugResponse.data?.data;
+
+  if (!debugData?.is_valid || debugData.app_id !== FACEBOOK_APP_ID) {
+    throw new Error("Invalid Facebook token");
+  }
+
+  const profileResponse = await axios.get("https://graph.facebook.com/me", {
+    params: {
+      fields: "id,name,email,picture.type(large)",
+      access_token: token,
+    },
+  });
+
+  const profile = profileResponse.data;
+  if (!profile?.id || !profile?.name || !profile?.email) {
+    throw new Error("Facebook account must provide name and email");
+  }
+
+  return {
+    providerId: profile.id,
+    email: profile.email,
+    username: profile.name,
+    profileImage: profile.picture?.data?.url,
+  };
+};
+
+const buildUniqueUsername = async (rawUsername: string) => {
+  const base = rawUsername
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 24) || "user";
+
+  let candidate = base;
+  let suffix = 1;
+
+  while (await User.exists({ username: candidate })) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+
+  return candidate;
+};
+
 const generateTokens = (userId: string) => {
   const accessToken = jwt.sign({ _id: userId }, ACCESS_TOKEN_SECRET, {
     expiresIn: ACCESS_TOKEN_EXPIRATION,
@@ -134,10 +300,10 @@ const saveAndRespondWithTokens = async (user: IUser, res: Response, status = 200
       username: user.username,
       email: user.email,
       profileImage: user.profileImage || "",
-      provider: user.provider || "local"
+      provider: user.provider || "local",
     },
     accessToken,
-    refreshToken
+    refreshToken,
   });
 };
 
@@ -199,6 +365,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const socialAuth = async (req: Request, res: Response): Promise<void> => {
   try {
+    const { provider, token, providerId, email, username, profileImage } = req.body;
     const { provider, token } = req.body;
 
     if (!["google", "facebook"].includes(provider)) {
@@ -206,6 +373,32 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
+    let socialProfile: SocialProfile;
+
+    if (token) {
+      socialProfile =
+        provider === "google"
+          ? await verifyGoogleToken(token)
+          : await verifyFacebookToken(token);
+    } else {
+      if (!providerId || !email || !username) {
+        res.status(400).json({ message: "provider token is required" });
+        return;
+      }
+
+      socialProfile = {
+        providerId,
+        email,
+        username,
+        profileImage,
+      };
+    }
+
+    const storedProfileImage = await persistExternalProfileImage(
+      socialProfile.profileImage,
+      provider,
+      socialProfile.providerId
+    );
     if (!token) {
       res.status(400).json({ message: "provider token is required" });
       return;
@@ -219,21 +412,28 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
     const { providerId, email, username, profileImage } = socialProfile;
 
     let user = (await User.findOne({
-      $or: [{ provider, providerId }, { email }]
+      $or: [{ provider, providerId: socialProfile.providerId }, { email: socialProfile.email }],
     })) as IUser | null;
 
     if (!user) {
+      const usernameToUse = await buildUniqueUsername(socialProfile.username);
+      user = (await User.create({
+        username: usernameToUse,
+        email: socialProfile.email,
       const usernameToUse = await buildUniqueUsername(username);
       user = (await User.create({
         username: usernameToUse,
         email,
         profileImage: storedProfileImage || "",
         provider,
-        providerId,
-        refreshTokens: []
+        providerId: socialProfile.providerId,
+        refreshTokens: [],
       })) as IUser;
     } else {
       user.provider = provider;
+      user.providerId = socialProfile.providerId;
+      if (storedProfileImage) {
+        user.profileImage = storedProfileImage;
       user.providerId = providerId;
       if (profileImage) {
         user.profileImage = profileImage;
@@ -289,6 +489,9 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
+    const { accessToken, refreshToken: newRefreshToken } = generateTokens(
+      (user as IUser)._id.toString()
+    );
     const { accessToken, refreshToken: newRefreshToken } = generateTokens((user as IUser)._id.toString());
 
     user.refreshTokens = user.refreshTokens.filter((token) => token !== refreshToken);
