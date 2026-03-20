@@ -83,21 +83,14 @@ router.post("/login", authController.login);
  *             type: object
  *             required:
  *               - provider
- *               - providerId
- *               - email
- *               - username
+ *               - token
  *             properties:
  *               provider:
  *                 type: string
  *                 enum: [google, facebook]
- *               providerId:
+ *               token:
  *                 type: string
- *               email:
- *                 type: string
- *               username:
- *                 type: string
- *               profileImage:
- *                 type: string
+ *                 description: Google ID token or Facebook access token
  *     responses:
  *       200:
  *         description: Social login successful
