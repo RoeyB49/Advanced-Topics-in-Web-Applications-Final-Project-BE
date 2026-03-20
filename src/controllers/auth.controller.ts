@@ -16,6 +16,7 @@ if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
     "ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be defined in environment variables"
   );
 }
+
 const ACCESS_TOKEN_EXPIRATION = "15m";
 const REFRESH_TOKEN_EXPIRATION = "7d";
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
@@ -111,7 +112,6 @@ const buildUniqueUsername = async (rawUsername: string) => {
   return candidate;
 };
 
-// Generate tokens
 const generateTokens = (userId: string) => {
   const accessToken = jwt.sign({ _id: userId }, ACCESS_TOKEN_SECRET, {
     expiresIn: ACCESS_TOKEN_EXPIRATION,
@@ -141,35 +141,28 @@ const saveAndRespondWithTokens = async (user: IUser, res: Response, status = 200
   });
 };
 
-/**
- * Register a new user
- */
 export const register = async (req: Request, res: Response): Promise<void> => {
   try {
     const { username, email, password } = req.body;
 
-    // Validate required fields
     if (!username || !email || !password) {
       res.status(400).json({ message: "All fields are required" });
       return;
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
       res.status(409).json({ message: "User with this email or username already exists" });
       return;
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
-    const user = await User.create({
+    const user = (await User.create({
       username,
       email,
       password: hashedPassword,
-    }) as IUser;
+    })) as IUser;
 
     await saveAndRespondWithTokens(user, res, 201);
   } catch (error: any) {
@@ -177,27 +170,21 @@ export const register = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-/**
- * Login user
- */
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
 
-    // Validate required fields
     if (!email || !password) {
       res.status(400).json({ message: "Email and password are required" });
       return;
     }
 
-    // Find user
     const user = await User.findOne({ email });
     if (!user) {
       res.status(401).json({ message: "Invalid credentials" });
       return;
     }
 
-    // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password || "");
     if (!isPasswordValid) {
       res.status(401).json({ message: "Invalid credentials" });
@@ -210,9 +197,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-/**
- * Social auth login/register (backend integration point)
- */
 export const socialAuth = async (req: Request, res: Response): Promise<void> => {
   try {
     const { provider, token } = req.body;
@@ -243,7 +227,7 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
       user = (await User.create({
         username: usernameToUse,
         email,
-        profileImage: profileImage || "",
+        profileImage: storedProfileImage || "",
         provider,
         providerId,
         refreshTokens: []
@@ -262,9 +246,6 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
   }
 };
 
-/**
- * Logout user
- */
 export const logout = async (req: Request, res: Response): Promise<void> => {
   try {
     const { refreshToken } = req.body;
@@ -274,10 +255,8 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    // Verify token
     const decoded = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { _id: string };
 
-    // Find user and remove refresh token
     const user = await User.findById(decoded._id);
     if (!user) {
       res.status(401).json({ message: "Invalid token" });
@@ -293,9 +272,6 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
   }
 };
 
-/**
- * Refresh access token
- */
 export const refreshToken = async (req: Request, res: Response): Promise<void> => {
   try {
     const { refreshToken } = req.body;
@@ -305,20 +281,16 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // Verify refresh token
     const decoded = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET) as { _id: string };
 
-    // Find user
     const user = await User.findById(decoded._id);
     if (!user || !user.refreshTokens.includes(refreshToken)) {
       res.status(401).json({ message: "Invalid refresh token" });
       return;
     }
 
-    // Generate new tokens
     const { accessToken, refreshToken: newRefreshToken } = generateTokens((user as IUser)._id.toString());
 
-    // Replace old refresh token with new one
     user.refreshTokens = user.refreshTokens.filter((token) => token !== refreshToken);
     user.refreshTokens.push(newRefreshToken);
     await user.save();
