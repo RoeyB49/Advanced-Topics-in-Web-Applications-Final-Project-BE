@@ -3,8 +3,6 @@ import User, { IUser } from "../models/user.model";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import axios from "axios";
-import fs from "fs";
-import path from "path";
 import { OAuth2Client } from "google-auth-library";
 
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
@@ -28,72 +26,6 @@ type SocialProfile = {
   email: string;
   username: string;
   profileImage?: string;
-};
-
-const resolveImageExtension = (contentType?: string, imageUrl?: string) => {
-  if (contentType) {
-    if (contentType.includes("image/png")) return ".png";
-    if (contentType.includes("image/webp")) return ".webp";
-    if (contentType.includes("image/gif")) return ".gif";
-    if (contentType.includes("image/jpeg") || contentType.includes("image/jpg")) {
-      return ".jpg";
-    }
-  }
-
-  if (imageUrl) {
-    try {
-      const ext = path.extname(new URL(imageUrl).pathname).toLowerCase();
-      if ([".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)) {
-        return ext === ".jpeg" ? ".jpg" : ext;
-      }
-    } catch {
-      // Ignore URL parsing failures and fall back to default extension.
-    }
-  }
-
-  return ".jpg";
-};
-
-const persistExternalProfileImage = async (
-  imageUrl: string | undefined,
-  provider: "google" | "facebook",
-  providerId: string
-) => {
-  if (!imageUrl) {
-    return "";
-  }
-
-  if (imageUrl.startsWith("/uploads/")) {
-    return imageUrl;
-  }
-
-  if (!/^https?:\/\//i.test(imageUrl)) {
-    return "";
-  }
-
-  try {
-    const response = await axios.get<ArrayBuffer>(imageUrl, {
-      responseType: "arraybuffer",
-      timeout: 10000,
-    });
-
-    const uploadDir = path.resolve(process.cwd(), "uploads", "profiles");
-    fs.mkdirSync(uploadDir, { recursive: true });
-
-    const extension = resolveImageExtension(
-      response.headers["content-type"] as string | undefined,
-      imageUrl
-    );
-    const filename = `social-${provider}-${providerId}-${Date.now()}${extension}`;
-    const targetPath = path.join(uploadDir, filename);
-
-    fs.writeFileSync(targetPath, Buffer.from(response.data));
-
-    return `/uploads/profiles/${filename}`;
-  } catch (error) {
-    console.warn("Could not persist external social profile image", error);
-    return "";
-  }
 };
 
 const verifyGoogleToken = async (token: string): Promise<SocialProfile> => {
@@ -285,11 +217,6 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
         : await verifyFacebookToken(token);
 
     const { providerId, email, username, profileImage } = socialProfile;
-    const storedProfileImage = await persistExternalProfileImage(
-      profileImage,
-      provider,
-      providerId
-    );
 
     let user = (await User.findOne({
       $or: [{ provider, providerId }, { email }]
@@ -308,8 +235,8 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
     } else {
       user.provider = provider;
       user.providerId = providerId;
-      if (storedProfileImage) {
-        user.profileImage = storedProfileImage;
+      if (profileImage) {
+        user.profileImage = profileImage;
       }
     }
 
