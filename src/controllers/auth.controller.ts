@@ -5,7 +5,6 @@ import jwt from "jsonwebtoken";
 import axios from "axios";
 import fs from "fs";
 import path from "path";
-import { OAuth2Client } from "google-auth-library";
 
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
 const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
@@ -21,98 +20,6 @@ if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
 
 const ACCESS_TOKEN_EXPIRATION = "15m";
 const REFRESH_TOKEN_EXPIRATION = "7d";
-const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
-
-type SocialProfile = {
-  providerId: string;
-  email: string;
-  username: string;
-  profileImage?: string;
-};
-
-const verifyGoogleToken = async (token: string): Promise<SocialProfile> => {
-  if (!googleClient || !GOOGLE_CLIENT_ID) {
-    throw new Error("Google login is not configured on the server");
-  }
-
-  const ticket = await googleClient.verifyIdToken({
-    idToken: token,
-    audience: GOOGLE_CLIENT_ID,
-  });
-
-  const payload = ticket.getPayload();
-
-  if (!payload?.sub || !payload.email || !payload.name) {
-    throw new Error("Invalid Google token payload");
-  }
-
-  return {
-    providerId: payload.sub,
-    email: payload.email,
-    username: payload.name,
-    profileImage: payload.picture,
-  };
-};
-
-const verifyFacebookToken = async (token: string): Promise<SocialProfile> => {
-  if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) {
-    throw new Error("Facebook login is not configured on the server");
-  }
-
-  const appAccessToken = `${FACEBOOK_APP_ID}|${FACEBOOK_APP_SECRET}`;
-
-  const debugResponse = await axios.get("https://graph.facebook.com/debug_token", {
-    params: {
-      input_token: token,
-      access_token: appAccessToken,
-    },
-  });
-
-  const debugData = debugResponse.data?.data;
-
-  if (!debugData?.is_valid || debugData.app_id !== FACEBOOK_APP_ID) {
-    throw new Error("Invalid Facebook token");
-  }
-
-  const profileResponse = await axios.get("https://graph.facebook.com/me", {
-    params: {
-      fields: "id,name,email,picture.type(large)",
-      access_token: token,
-    },
-  });
-
-  const profile = profileResponse.data;
-  if (!profile?.id || !profile?.name || !profile?.email) {
-    throw new Error("Facebook account must provide name and email");
-  }
-
-  return {
-    providerId: profile.id,
-    email: profile.email,
-    username: profile.name,
-    profileImage: profile.picture?.data?.url,
-  };
-};
-
-const buildUniqueUsername = async (rawUsername: string) => {
-  const base = rawUsername
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 24) || "user";
-
-  let candidate = base;
-  let suffix = 1;
-
-  while (await User.exists({ username: candidate })) {
-    candidate = `${base}_${suffix}`;
-    suffix += 1;
-  }
-
-  return candidate;
-};
 
 type Provider = "google" | "facebook";
 
@@ -366,7 +273,6 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 export const socialAuth = async (req: Request, res: Response): Promise<void> => {
   try {
     const { provider, token, providerId, email, username, profileImage } = req.body;
-    const { provider, token } = req.body;
 
     if (!["google", "facebook"].includes(provider)) {
       res.status(400).json({ message: "provider must be google or facebook" });
@@ -399,17 +305,6 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
       provider,
       socialProfile.providerId
     );
-    if (!token) {
-      res.status(400).json({ message: "provider token is required" });
-      return;
-    }
-
-    const socialProfile =
-      provider === "google"
-        ? await verifyGoogleToken(token)
-        : await verifyFacebookToken(token);
-
-    const { providerId, email, username, profileImage } = socialProfile;
 
     let user = (await User.findOne({
       $or: [{ provider, providerId: socialProfile.providerId }, { email: socialProfile.email }],
@@ -420,10 +315,6 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
       user = (await User.create({
         username: usernameToUse,
         email: socialProfile.email,
-      const usernameToUse = await buildUniqueUsername(username);
-      user = (await User.create({
-        username: usernameToUse,
-        email,
         profileImage: storedProfileImage || "",
         provider,
         providerId: socialProfile.providerId,
@@ -434,9 +325,6 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
       user.providerId = socialProfile.providerId;
       if (storedProfileImage) {
         user.profileImage = storedProfileImage;
-      user.providerId = providerId;
-      if (profileImage) {
-        user.profileImage = profileImage;
       }
     }
 
@@ -463,7 +351,7 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
-    user.refreshTokens = user.refreshTokens.filter((token) => token !== refreshToken);
+    user.refreshTokens = user.refreshTokens.filter((storedToken) => storedToken !== refreshToken);
     await user.save();
 
     res.status(200).json({ message: "Logout successful" });
@@ -492,9 +380,8 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     const { accessToken, refreshToken: newRefreshToken } = generateTokens(
       (user as IUser)._id.toString()
     );
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens((user as IUser)._id.toString());
 
-    user.refreshTokens = user.refreshTokens.filter((token) => token !== refreshToken);
+    user.refreshTokens = user.refreshTokens.filter((storedToken) => storedToken !== refreshToken);
     user.refreshTokens.push(newRefreshToken);
     await user.save();
 
@@ -506,3 +393,4 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
     res.status(401).json({ message: "Invalid token" });
   }
 };
+
