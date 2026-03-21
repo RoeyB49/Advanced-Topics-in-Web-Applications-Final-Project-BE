@@ -113,4 +113,36 @@ describe("Post Endpoints", () => {
     expect(res.status).toBe(200);
     expect(res.body.message).toContain("deleted successfully");
   });
+
+  it("should return anime-aware AI analysis with intelligent search results", async () => {
+    await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Attack on Titan has one of the best dark story arcs" });
+
+    const res = await request(app)
+      .get("/api/posts/search/intelligent")
+      .query({ q: "best dark anime like attack on titan" });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("query", "best dark anime like attack on titan");
+    expect(res.body).toHaveProperty("posts");
+    expect(Array.isArray(res.body.posts)).toBe(true);
+    expect(res.body).toHaveProperty("ai");
+    expect(res.body.ai).toHaveProperty("source", "fallback");
+    expect(res.body.ai).toHaveProperty("intent");
+    expect(res.body.ai).toHaveProperty("sentimentHint", "positive");
+    expect(Array.isArray(res.body.ai.keywords)).toBe(true);
+    expect(Array.isArray(res.body.ai.detectedAnimeTitles)).toBe(true);
+    expect(res.body.ai.detectedAnimeTitles).toContain("attack on titan");
+    expect(Array.isArray(res.body.ai.detectedGenres)).toBe(true);
+    expect(res.body.posts.length).toBeGreaterThan(0);
+  });
+
+  it("should return 400 for intelligent search without query", async () => {
+    const res = await request(app).get("/api/posts/search/intelligent");
+
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty("message", "Search query is required");
+  });
 });

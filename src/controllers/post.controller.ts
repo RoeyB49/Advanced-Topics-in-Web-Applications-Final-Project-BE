@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import Post from "../models/post.model";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { searchPosts as searchPostsWithAI } from "../services/ai.service";
+import { searchPostsWithInsights } from "../services/ai.service";
 import Comment from "../models/comment.model";
 
 /**
@@ -398,6 +399,45 @@ export const searchPosts = async (req: Request, res: Response): Promise<void> =>
     }
     const posts = await searchPostsWithAI(query);
     res.status(200).json(posts);
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+/**
+ * @swagger
+ * /api/posts/search/intelligent:
+ *   get:
+ *     summary: Anime-aware intelligent search with AI query analysis and matching posts
+ *     tags: [Posts]
+ *     parameters:
+ *       - in: query
+ *         name: q
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Natural language query, for example "best dark anime like attack on titan"
+ *     responses:
+ *       200:
+ *         description: Query analysis metadata and matching posts
+ *       400:
+ *         description: Search query is required
+ *       500:
+ *         description: Internal server error
+ */
+export const intelligentSearchPosts = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const query = req.query.q as string;
+    if (!query) {
+      res.status(400).json({ message: "Search query is required" });
+      return;
+    }
+
+    const result = await searchPostsWithInsights(query);
+    res.status(200).json(result);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
