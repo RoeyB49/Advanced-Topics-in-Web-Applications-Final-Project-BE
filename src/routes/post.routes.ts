@@ -36,6 +36,7 @@ router.post(
   postController.createPost
 );
 router.get("/search", postController.searchPosts);
+router.get("/search/intelligent", postController.intelligentSearchPosts);
 router.get("/:id", postController.getPostById);
 router.put(
   "/:id",

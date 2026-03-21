@@ -7,6 +7,9 @@ process.env.GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "test-google-clie
 process.env.FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID || "test-facebook-app-id";
 process.env.FACEBOOK_APP_SECRET =
   process.env.FACEBOOK_APP_SECRET || "test-facebook-app-secret";
+process.env.AI_EXTERNAL_ENABLED = "false";
+process.env.AI_MIN_INTERVAL_MS = process.env.AI_MIN_INTERVAL_MS || "0";
+process.env.AI_CACHE_TTL_MS = process.env.AI_CACHE_TTL_MS || "600000";
 
 let mongoServer: MongoMemoryServer;
 
