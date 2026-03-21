@@ -1,5 +1,10 @@
 import request from "supertest";
+import axios from "axios";
 import { app } from "../app";
+
+jest.mock("axios");
+
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 describe("Post Endpoints", () => {
   let accessToken: string;
@@ -144,5 +149,58 @@ describe("Post Endpoints", () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("message", "Search query is required");
+  });
+
+  it("should use Gemini provider for intelligent search when enabled", async () => {
+    process.env.AI_EXTERNAL_ENABLED = "true";
+    process.env.GEMINI_API_KEY = "test-gemini-key";
+
+    mockedAxios.post.mockResolvedValueOnce({
+      data: {
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  text: JSON.stringify({
+                    keywords: ["attack", "titan", "dark"],
+                    detectedAnimeTitles: ["attack on titan"],
+                    detectedGenres: ["action", "drama"],
+                    sentimentHint: "positive",
+                    intent: "analysis",
+                  }),
+                },
+              ],
+            },
+          },
+        ],
+      },
+    } as any);
+
+    await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ text: "Attack on Titan analysis and dark themes" });
+
+    const res = await request(app)
+      .get("/api/posts/search/intelligent")
+      .query({ q: "analyze attack on titan dark themes" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ai).toHaveProperty("source", "gemini");
+    expect(res.body.ai).toHaveProperty("intent", "analysis");
+    expect(res.body.ai.detectedAnimeTitles).toContain("attack on titan");
+    expect(mockedAxios.post).toHaveBeenCalledWith(
+      expect.stringContaining("generativelanguage.googleapis.com"),
+      expect.any(Object),
+      expect.objectContaining({
+        params: expect.objectContaining({
+          key: "test-gemini-key",
+        }),
+      })
+    );
+
+    process.env.AI_EXTERNAL_ENABLED = "false";
+    mockedAxios.post.mockReset();
   });
 });

@@ -1,7 +1,6 @@
 import axios from "axios";
 import Post from "../models/post.model";
 
-const AI_API_URL = process.env.AI_API_URL || "http://localhost:5000/api";
 const AI_MIN_INTERVAL_MS = parseInt(process.env.AI_MIN_INTERVAL_MS || "1500", 10);
 const AI_CACHE_TTL_MS = parseInt(process.env.AI_CACHE_TTL_MS || "300000", 10);
 
@@ -18,7 +17,7 @@ export type AnimeQueryInsights = {
   detectedGenres: string[];
   sentimentHint: "positive" | "negative" | "mixed" | "neutral";
   intent: "recommendation" | "comparison" | "analysis" | "general-search";
-  source: "external-ai" | "fallback";
+  source: "gemini" | "fallback";
 };
 
 const queryCache = new Map<string, CacheEntry>();
@@ -142,6 +141,129 @@ const buildFallbackInsights = (normalizedQuery: string): AnimeQueryInsights => {
   };
 };
 
+const buildGeminiPrompt = (normalizedQuery: string) => {
+  return [
+    "You analyze anime review search queries for a social app.",
+    "Return only valid JSON with this exact schema:",
+    "{",
+    '  "keywords": string[],',
+    '  "detectedAnimeTitles": string[],',
+    '  "detectedGenres": string[],',
+    '  "sentimentHint": "positive"|"negative"|"mixed"|"neutral",',
+    '  "intent": "recommendation"|"comparison"|"analysis"|"general-search"',
+    "}",
+    "Rules:",
+    "- Use lowercase for strings.",
+    "- keywords should be short searchable terms.",
+    "- If uncertain, return empty arrays and neutral/general-search.",
+    `Query: ${normalizedQuery}`,
+  ].join("\n");
+};
+
+const extractJsonFromText = (text: string): string => {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("Gemini response does not contain a JSON object");
+  }
+
+  return text.slice(start, end + 1);
+};
+
+const parseGeminiInsights = (
+  normalizedQuery: string,
+  textResponse: string,
+  fallback: AnimeQueryInsights
+): AnimeQueryInsights => {
+  const parsed = JSON.parse(extractJsonFromText(textResponse));
+
+  const keywords =
+    Array.isArray(parsed?.keywords) && parsed.keywords.length > 0
+      ? parsed.keywords.map((value: string) => String(value).toLowerCase())
+      : fallback.keywords;
+
+  const detectedAnimeTitles =
+    Array.isArray(parsed?.detectedAnimeTitles) && parsed.detectedAnimeTitles.length > 0
+      ? parsed.detectedAnimeTitles.map((value: string) => String(value).toLowerCase())
+      : fallback.detectedAnimeTitles;
+
+  const detectedGenres =
+    Array.isArray(parsed?.detectedGenres) && parsed.detectedGenres.length > 0
+      ? parsed.detectedGenres.map((value: string) => String(value).toLowerCase())
+      : fallback.detectedGenres;
+
+  const sentimentHint =
+    parsed?.sentimentHint === "positive" ||
+    parsed?.sentimentHint === "negative" ||
+    parsed?.sentimentHint === "mixed" ||
+    parsed?.sentimentHint === "neutral"
+      ? parsed.sentimentHint
+      : fallback.sentimentHint;
+
+  const intent =
+    parsed?.intent === "recommendation" ||
+    parsed?.intent === "comparison" ||
+    parsed?.intent === "analysis" ||
+    parsed?.intent === "general-search"
+      ? parsed.intent
+      : fallback.intent;
+
+  return {
+    normalizedQuery,
+    keywords,
+    detectedAnimeTitles,
+    detectedGenres,
+    sentimentHint,
+    intent,
+    source: "gemini",
+  };
+};
+
+const analyzeWithGemini = async (normalizedQuery: string): Promise<AnimeQueryInsights> => {
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
+  const geminiApiUrl =
+    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
+
+  if (!geminiApiKey) {
+    throw new Error("GEMINI_API_KEY is not configured");
+  }
+
+  const prompt = buildGeminiPrompt(normalizedQuery);
+  const fallback = buildFallbackInsights(normalizedQuery);
+
+  const response = await axios.post(
+    geminiApiUrl,
+    {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+      },
+    },
+    {
+      params: {
+        key: geminiApiKey,
+      },
+      timeout: 10000,
+    }
+  );
+
+  const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!textResponse || typeof textResponse !== "string") {
+    throw new Error("Gemini returned empty response");
+  }
+
+  return parseGeminiInsights(normalizedQuery, textResponse, fallback);
+};
+
 /**
  * Analyzes a search query with an external AI service to get search terms.
  * @param query The user's natural language query.
@@ -174,49 +296,11 @@ export const analyzeAnimeQuery = async (query: string): Promise<AnimeQueryInsigh
   try {
     if (shouldCallExternal) {
       lastExternalRequestAt = now;
-      const response = await axios.post(`${AI_API_URL}/analyze-anime-query`, {
-        query: normalized
-      });
-
-      const fallback = buildFallbackInsights(normalized);
-      const externalKeywords =
-        Array.isArray(response.data?.keywords) && response.data.keywords.length > 0
-          ? response.data.keywords
-          : fallback.keywords;
-
-      const externalInsights: AnimeQueryInsights = {
-        normalizedQuery: normalized,
-        keywords: externalKeywords,
-        detectedAnimeTitles:
-          Array.isArray(response.data?.detectedAnimeTitles) &&
-          response.data.detectedAnimeTitles.length > 0
-            ? response.data.detectedAnimeTitles
-            : fallback.detectedAnimeTitles,
-        detectedGenres:
-          Array.isArray(response.data?.detectedGenres) &&
-          response.data.detectedGenres.length > 0
-            ? response.data.detectedGenres
-            : fallback.detectedGenres,
-        sentimentHint:
-          response.data?.sentimentHint === "positive" ||
-          response.data?.sentimentHint === "negative" ||
-          response.data?.sentimentHint === "mixed" ||
-          response.data?.sentimentHint === "neutral"
-            ? response.data.sentimentHint
-            : fallback.sentimentHint,
-        intent:
-          response.data?.intent === "recommendation" ||
-          response.data?.intent === "comparison" ||
-          response.data?.intent === "analysis" ||
-          response.data?.intent === "general-search"
-            ? response.data.intent
-            : fallback.intent,
-        source: "external-ai",
-      };
+      const externalInsights = await analyzeWithGemini(normalized);
 
       queryCache.set(normalized, {
         insights: externalInsights,
-        keywords: externalKeywords,
+        keywords: externalInsights.keywords,
         createdAt: Date.now()
       });
 
