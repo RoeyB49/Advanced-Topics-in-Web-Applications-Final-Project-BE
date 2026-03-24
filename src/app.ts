@@ -8,6 +8,7 @@ import postRoutes from "./routes/post.routes";
 import commentRoutes from "./routes/comment.routes";
 import authRoutes from "./routes/auth.routes";
 import userRoutes from "./routes/user.routes";
+import aiRoutes from "./routes/ai.routes";
 import path from "path";
 
 // Load environment variables
@@ -65,6 +66,7 @@ app.use("/api/posts", postRoutes);
 app.use("/api/posts/:postId/comments", commentRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/ai", aiRoutes);
 
 // Health check endpoint
 app.get("/", (req, res) => {
