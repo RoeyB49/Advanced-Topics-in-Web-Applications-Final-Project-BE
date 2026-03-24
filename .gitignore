@@ -75,6 +75,8 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+deploy/.env.production.example
+deploy/.env.production
 
 # parcel-bundler cache files
 .cache
