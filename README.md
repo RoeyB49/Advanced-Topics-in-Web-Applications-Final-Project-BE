@@ -40,3 +40,63 @@ npm run dev
 ## Notes
 
 - Environment variables are required (`.env`)
+
+## Deployment (Colman Ubuntu Server)
+
+This project can be deployed on your provided server (`node01.cs.colman.ac.il`) using:
+
+- Backend with `pm2` on port `4000`
+- Frontend static files via `nginx`
+- Nginx reverse proxy for `/api`, `/api-docs`, and `/uploads`
+
+### Important prerequisite
+
+SSH (`port 22`) is available only via SSL VPN according to your IT guide.
+If SSH is refused, connect VPN first.
+
+### 1. Server folders
+
+Run on server:
+
+```bash
+mkdir -p ~/apps
+mkdir -p /var/www/animon-fe
+```
+
+### 2. Backend setup (server)
+
+```bash
+cd ~/apps
+git clone <YOUR_BE_REPO_URL> animon-be
+cd animon-be
+cp deploy/.env.production.example .env
+nano .env
+chmod +x deploy/deploy_be.sh deploy/setup_nginx.sh
+./deploy/deploy_be.sh
+```
+
+### 3. Frontend setup (server)
+
+Clone frontend on server under `~/apps/animon-fe` and deploy static build to `/var/www/animon-fe/dist`.
+Use the frontend deployment script from FE repo branch `chore/fe-deploy-colman-ubuntu`.
+
+### 4. Nginx setup (server)
+
+```bash
+cd ~/apps/animon-be
+./deploy/setup_nginx.sh
+```
+
+### 5. Verify
+
+- `http://node01.cs.colman.ac.il` -> frontend
+- `http://node01.cs.colman.ac.il/api` -> backend routes
+- `http://node01.cs.colman.ac.il/api-docs` -> Swagger
+
+### Deployment files in this repo
+
+- `deploy/deploy_be.sh`
+- `deploy/ecosystem.config.cjs`
+- `deploy/setup_nginx.sh`
+- `deploy/nginx_animon.conf`
+- `deploy/.env.production.example`
