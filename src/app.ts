@@ -68,7 +68,35 @@ const swaggerOptions = {
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+app.get("/api-docs.json", (req, res) => {
+  const configuredUrl = process.env.SWAGGER_SERVER_URL?.trim();
+  const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol;
+  const host = req.get("host");
+  const requestBasedUrl = host ? `${protocol}://${host}` : "/";
+  const resolvedUrl = configuredUrl || requestBasedUrl;
+
+  res.json({
+    ...swaggerDocs,
+    servers: [
+      {
+        url: resolvedUrl,
+        description: configuredUrl ? "Configured server" : "Current server",
+      },
+    ],
+  });
+});
+
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(undefined, {
+    swaggerOptions: {
+      url: "/api-docs.json",
+    },
+  })
+);
 
 // Routes
 app.use("/api/posts", postRoutes);
