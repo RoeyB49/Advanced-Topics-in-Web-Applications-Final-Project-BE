@@ -134,6 +134,99 @@ describe("AI Endpoints", () => {
     expect(titles).not.toContain("Steins;Gate");
   });
 
+  it("should provide different recommendations for 'something else' even without chat history", async () => {
+    const firstRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend mystery thriller anime",
+        watchedAnimes: [],
+        preferences: ["mystery", "thriller", "seinen", "sci-fi"],
+      });
+
+    const secondRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["mystery", "thriller", "seinen", "sci-fi"],
+      });
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+
+    const firstTitles = firstRes.body.recommendations.map((item: { title: string }) => item.title);
+    const secondTitles = secondRes.body.recommendations.map((item: { title: string }) => item.title);
+
+    expect(firstTitles.length).toBeGreaterThan(0);
+    expect(secondTitles.length).toBeGreaterThan(0);
+    expect(secondTitles).not.toEqual(firstTitles);
+    expect(secondTitles.some((title: string) => firstTitles.includes(title))).toBe(false);
+  });
+
+  it("should enforce low overlap across repeated 'something else' rounds", async () => {
+    const firstRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend action and adventure anime",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    const secondRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    const thirdRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    expect(thirdRes.status).toBe(200);
+
+    const firstTitles = firstRes.body.recommendations.map((item: { title: string }) => item.title);
+    const secondTitles = secondRes.body.recommendations.map((item: { title: string }) => item.title);
+    const thirdTitles = thirdRes.body.recommendations.map((item: { title: string }) => item.title);
+
+    const firstAndSecond = new Set([...firstTitles, ...secondTitles]);
+    const overlapWithPreviousRounds = thirdTitles.filter((title: string) => firstAndSecond.has(title));
+
+    expect(overlapWithPreviousRounds.length).toBeLessThanOrEqual(1);
+  });
+
+  it("should treat explicit title requests like Blue Lock as sports intent", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "maybe something like blue lock?",
+        watchedAnimes: [],
+        preferences: [],
+      });
+
+    expect(res.status).toBe(200);
+    const titles = res.body.recommendations.map((item: { title: string }) => item.title);
+
+    expect(
+      titles.includes("Blue Lock") ||
+      titles.includes("Haikyuu!!") ||
+      titles.includes("Kuroko's Basketball")
+    ).toBe(true);
+  });
+
   it("should return gemini recommendations when external AI is enabled", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
     process.env.GEMINI_API_KEY = "test-gemini-key";
