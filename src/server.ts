@@ -9,19 +9,20 @@ const startServer = async () => {
   await connectDB();
 
   const isProd = process.env.NODE_ENV === "production";
+  const host = process.env.HOST || "0.0.0.0";
   const port = Number(process.env.PORT || 3001);
 
   const hasAccessSecret = Boolean(process.env.ACCESS_TOKEN_SECRET);
   const hasRefreshSecret = Boolean(process.env.REFRESH_TOKEN_SECRET);
 
   if (!isProd) {
-    http.createServer(app).listen(port, () => {
+    http.createServer(app).listen(port, host, () => {
       console.log("development");
-      console.log(`HTTP server running on http://localhost:${port}`);
+      console.log(`HTTP server running on http://${host}:${port}`);
       console.log(
         `Auth secrets loaded: access=${hasAccessSecret ? "yes" : "no"}, refresh=${hasRefreshSecret ? "yes" : "no"}`
       );
-      console.log(`Swagger documentation available at http://localhost:${port}/api-docs`);
+      console.log(`Swagger documentation available at http://${host}:${port}/api-docs`);
     });
     return;
   }
@@ -34,18 +35,26 @@ const startServer = async () => {
     throw new Error("SSL_KEY_PATH and SSL_CERT_PATH must be set in production.");
   }
 
+  if (!fs.existsSync(keyPath)) {
+    throw new Error(`SSL key file not found: ${keyPath}`);
+  }
+
+  if (!fs.existsSync(certPath)) {
+    throw new Error(`SSL cert file not found: ${certPath}`);
+  }
+
   const options = {
     key: fs.readFileSync(keyPath),
     cert: fs.readFileSync(certPath),
   };
 
-  https.createServer(options, app).listen(httpsPort, () => {
+  https.createServer(options, app).listen(httpsPort, host, () => {
     console.log("PRODUCTION");
-    console.log(`HTTPS server running on https://localhost:${httpsPort}`);
+    console.log(`HTTPS server running on https://${host}:${httpsPort}`);
     console.log(
       `Auth secrets loaded: access=${hasAccessSecret ? "yes" : "no"}, refresh=${hasRefreshSecret ? "yes" : "no"}`
     );
-    console.log(`Swagger documentation available at https://localhost:${httpsPort}/api-docs`);
+    console.log(`Swagger documentation available at https://${host}:${httpsPort}/api-docs`);
   });
 };
 
