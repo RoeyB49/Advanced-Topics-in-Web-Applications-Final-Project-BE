@@ -8,7 +8,7 @@ import Post from "../models/post.model";
  */
 export const getAllUsers = async (req: Request, res: Response): Promise<void> => {
   try {
-    const users = await User.find().select("-password -refreshTokens");
+    const users = await User.find().select("_id username profileImage provider createdAt updatedAt");
     res.status(200).json(users);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
@@ -20,7 +20,9 @@ export const getAllUsers = async (req: Request, res: Response): Promise<void> =>
  */
 export const getUserById = async (req: Request, res: Response): Promise<void> => {
   try {
-    const user = await User.findById(req.params.id).select("-password -refreshTokens");
+    const user = await User.findById(req.params.id).select(
+      "_id username profileImage provider createdAt updatedAt"
+    );
     if (!user) {
       res.status(404).json({ message: "User not found" });
       return;

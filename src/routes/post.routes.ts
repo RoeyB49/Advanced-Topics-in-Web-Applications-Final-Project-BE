@@ -1,9 +1,26 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import * as postController from "../controllers/post.controller";
 import { authMiddleware } from "../middleware/auth.middleware";
 import { uploadPostImage } from "../services/upload.service";
 
 const router = express.Router();
+
+const searchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many search requests, please try again later." },
+});
+
+const intelligentSearchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many intelligent search requests, please try again later." },
+});
 
 /**
  * @swagger
@@ -35,8 +52,12 @@ router.post(
   uploadPostImage.single("image"),
   postController.createPost
 );
-router.get("/search", postController.searchPosts);
-router.get("/search/intelligent", postController.intelligentSearchPosts);
+router.get("/search", searchLimiter, postController.searchPosts);
+router.get(
+  "/search/intelligent",
+  intelligentSearchLimiter,
+  postController.intelligentSearchPosts
+);
 router.get("/:id", postController.getPostById);
 router.put(
   "/:id",

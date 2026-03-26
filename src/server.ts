@@ -54,7 +54,7 @@ const startServer = async () => {
     console.log(
       `Auth secrets loaded: access=${hasAccessSecret ? "yes" : "no"}, refresh=${hasRefreshSecret ? "yes" : "no"}`
     );
-    console.log(`Swagger documentation available at https://${host}:${httpsPort}/api-docs`);
+    console.log("Swagger documentation is disabled in production");
   });
 };
 
