@@ -16,10 +16,7 @@ dotenv.config();
 
 const app: Express = express();
 
-const isProd = process.env.NODE_ENV === "production";
-const swaggerServerUrl =
-  process.env.SWAGGER_SERVER_URL ||
-  (isProd ? "https://10.10.246.1" : `http://localhost:${process.env.PORT || 3001}`);
+const swaggerServerUrl = process.env.SWAGGER_SERVER_URL || "/";
 
 const defaultOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
 const configuredOrigins = (process.env.FRONTEND_ORIGINS || "")
@@ -54,7 +51,7 @@ const swaggerOptions = {
     servers: [
       {
         url: swaggerServerUrl,
-        description: isProd ? "Production server" : "Development server",
+        description: "Current server",
       },
     ],
     components: {
