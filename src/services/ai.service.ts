@@ -1,6 +1,9 @@
 import axios from "axios";
+import fs from "fs";
+import path from "path";
 import Post from "../models/post.model";
 import Comment from "../models/comment.model";
+import animeCatalogSeed from "../data/anime-catalog.json";
 
 const AI_MIN_INTERVAL_MS = parseInt(process.env.AI_MIN_INTERVAL_MS || "1500", 10);
 const AI_CACHE_TTL_MS = parseInt(process.env.AI_CACHE_TTL_MS || "300000", 10);
@@ -10,6 +13,20 @@ const AI_CHAT_MIN_INTERVAL_MS = parseInt(
 );
 const AI_CHAT_CACHE_TTL_MS = parseInt(
   process.env.AI_CHAT_CACHE_TTL_MS || String(AI_CACHE_TTL_MS),
+  10
+);
+const AI_QUERY_CACHE_MAX_ENTRIES = parseInt(process.env.AI_QUERY_CACHE_MAX_ENTRIES || "400", 10);
+const AI_CHAT_CACHE_MAX_ENTRIES = parseInt(process.env.AI_CHAT_CACHE_MAX_ENTRIES || "400", 10);
+const AI_CHAT_VARIATION_WINDOW_MS = parseInt(
+  process.env.AI_CHAT_VARIATION_WINDOW_MS || "120000",
+  10
+);
+const AI_METRICS_HISTORY_TTL_MS = parseInt(
+  process.env.AI_METRICS_HISTORY_TTL_MS || "21600000",
+  10
+);
+const AI_METRICS_ROLLING_WINDOW_MS = parseInt(
+  process.env.AI_METRICS_ROLLING_WINDOW_MS || "900000",
   10
 );
 
@@ -32,7 +49,44 @@ export type AnimeQueryInsights = {
 const queryCache = new Map<string, CacheEntry>();
 let lastExternalRequestAt = 0;
 const chatCache = new Map<string, { response: ChatRecommendationResponse; createdAt: number }>();
-const lastChatExternalRequestAtByRequest = new Map<string, number>();
+
+const getFromCacheIfFresh = <T extends { createdAt: number }>(
+  cache: Map<string, T>,
+  key: string,
+  ttlMs: number
+): T | null => {
+  const cached = cache.get(key);
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - cached.createdAt > ttlMs) {
+    cache.delete(key);
+    return null;
+  }
+
+  return cached;
+};
+
+const setCacheEntry = <T>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
+  maxEntries: number
+) => {
+  if (cache.has(key)) {
+    cache.delete(key);
+  }
+
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+};
 
 export type ChatRole = "user" | "assistant";
 
@@ -64,6 +118,25 @@ export type ChatRecommendationResponse = {
   };
 };
 
+type FallbackReason = "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error";
+
+type AiAdvisorMetrics = {
+  totalChatRequests: number;
+  geminiResponses: number;
+  fallbackResponses: number;
+  fallbackReasons: Record<FallbackReason, number>;
+  responsesWithRecommendations: number;
+  repeatedRecommendationResponses: number;
+};
+
+type ChatMetricEvent = {
+  createdAt: number;
+  source: "gemini" | "fallback";
+  fallbackReason?: FallbackReason;
+  hasRecommendations: boolean;
+  repeatedRecommendation: boolean;
+};
+
 type ChatRecommendationRequest = {
   userId: string;
   message: string;
@@ -87,9 +160,113 @@ type FallbackContext = {
 
 type RecommendationBuildContext = {
   excludedTitles: Set<string>;
+  responseVariantSeed: string;
 };
 
 const normalizeQuery = (query: string): string => query.trim().toLowerCase();
+
+const normalizeCatalogEntries = (entries: unknown): AnimeCatalogEntry[] => {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  return entries
+    .map((entry) => {
+      const parsed = entry as Partial<AnimeCatalogEntry>;
+      const title = String(parsed.title || "").trim();
+      const genres = Array.isArray(parsed.genres)
+        ? parsed.genres.map((genre) => String(genre).trim().toLowerCase()).filter(Boolean)
+        : [];
+      const moods = Array.isArray(parsed.moods)
+        ? parsed.moods.map((mood) => String(mood).trim().toLowerCase()).filter(Boolean)
+        : [];
+      const tags = Array.isArray(parsed.tags)
+        ? parsed.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean)
+        : [];
+
+      return {
+        title,
+        genres,
+        moods,
+        tags,
+      };
+    })
+    .filter((entry) => entry.title && entry.genres.length > 0);
+};
+
+let animeRecommendationCatalog: AnimeCatalogEntry[] = normalizeCatalogEntries(animeCatalogSeed);
+let catalogKnownTitles: string[] = [];
+let catalogKnownGenres: string[] = [];
+let lastCatalogLoadedAt = Date.now();
+let activeCatalogPath = "seed";
+let activeCatalogMtimeMs = 0;
+
+const refreshCatalogIndexes = () => {
+  catalogKnownTitles = animeRecommendationCatalog
+    .map((entry) => entry.title.toLowerCase())
+    .filter((title, index, array) => array.indexOf(title) === index);
+
+  catalogKnownGenres = animeRecommendationCatalog
+    .flatMap((entry) => entry.genres)
+    .map((genre) => genre.trim().toLowerCase())
+    .filter((genre, index, array) => array.indexOf(genre) === index);
+};
+
+const resolveCatalogPathCandidates = (): string[] => {
+  const fromEnv = process.env.AI_CATALOG_PATH?.trim();
+  const candidates = [
+    fromEnv,
+    path.resolve(process.cwd(), "src/data/anime-catalog.json"),
+    path.resolve(process.cwd(), "dist/data/anime-catalog.json"),
+    path.resolve(__dirname, "../data/anime-catalog.json"),
+  ].filter((value): value is string => Boolean(value));
+
+  return candidates.filter((candidate, index, array) => array.indexOf(candidate) === index);
+};
+
+const maybeReloadCatalog = () => {
+  let foundRuntimeCatalog = false;
+
+  for (const candidatePath of resolveCatalogPathCandidates()) {
+    try {
+      if (!fs.existsSync(candidatePath)) {
+        continue;
+      }
+
+      foundRuntimeCatalog = true;
+      const stats = fs.statSync(candidatePath);
+      const nextMtime = stats.mtimeMs;
+      if (activeCatalogPath === candidatePath && activeCatalogMtimeMs === nextMtime) {
+        return;
+      }
+
+      const raw = fs.readFileSync(candidatePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const normalized = normalizeCatalogEntries(parsed);
+
+      if (normalized.length > 0) {
+        animeRecommendationCatalog = normalized;
+        activeCatalogPath = candidatePath;
+        activeCatalogMtimeMs = nextMtime;
+        lastCatalogLoadedAt = Date.now();
+        refreshCatalogIndexes();
+      }
+      return;
+    } catch (error) {
+      console.error("Failed to reload anime catalog:", error);
+    }
+  }
+
+  if (!foundRuntimeCatalog && activeCatalogPath !== "seed") {
+    animeRecommendationCatalog = normalizeCatalogEntries(animeCatalogSeed);
+    activeCatalogPath = "seed";
+    activeCatalogMtimeMs = 0;
+    lastCatalogLoadedAt = Date.now();
+    refreshCatalogIndexes();
+  }
+};
+
+refreshCatalogIndexes();
 
 const KNOWN_ANIME_TITLES = [
   "attack on titan",
@@ -129,68 +306,195 @@ const KNOWN_GENRES = [
   "isekai",
 ];
 
-const ANIME_RECOMMENDATION_CATALOG: AnimeCatalogEntry[] = [
-  {
-    title: "Attack on Titan",
-    genres: ["action", "drama", "thriller"],
-    moods: ["intense", "dark"],
-    tags: ["war", "twists", "strategy", "survival"],
-  },
-  {
-    title: "Fullmetal Alchemist: Brotherhood",
-    genres: ["action", "adventure", "drama"],
-    moods: ["emotional", "balanced"],
-    tags: ["brothers", "alchemy", "worldbuilding", "character growth"],
-  },
-  {
-    title: "Steins;Gate",
-    genres: ["sci-fi", "thriller", "drama"],
-    moods: ["mind-bending", "tense"],
-    tags: ["time travel", "mystery", "plot twists"],
-  },
-  {
-    title: "Haikyuu!!",
-    genres: ["sports", "comedy", "drama"],
-    moods: ["motivational", "uplifting"],
-    tags: ["teamwork", "character growth", "competition"],
-  },
-  {
-    title: "Vinland Saga",
-    genres: ["action", "drama", "seinen"],
-    moods: ["serious", "reflective"],
-    tags: ["revenge", "historical", "war", "mature"],
-  },
-  {
-    title: "Kaguya-sama: Love Is War",
-    genres: ["romance", "comedy"],
-    moods: ["fun", "light"],
-    tags: ["romcom", "mind games", "school"],
-  },
-  {
-    title: "Monster",
-    genres: ["mystery", "thriller", "seinen"],
-    moods: ["dark", "psychological"],
-    tags: ["slow burn", "crime", "moral conflict"],
-  },
-  {
-    title: "Mob Psycho 100",
-    genres: ["action", "comedy", "slice of life"],
-    moods: ["heartfelt", "energetic"],
-    tags: ["supernatural", "character growth", "funny"],
-  },
-  {
-    title: "Death Note",
-    genres: ["thriller", "mystery"],
-    moods: ["dark", "strategic"],
-    tags: ["cat and mouse", "mind games", "moral gray"],
-  },
-  {
-    title: "Frieren: Beyond Journey's End",
-    genres: ["fantasy", "drama", "adventure"],
-    moods: ["calm", "emotional"],
-    tags: ["journey", "reflection", "character driven"],
-  },
+const RECENT_ALTERNATIVE_HINTS = [
+  "something else",
+  "new list",
+  "different",
+  "another",
+  "more options",
+  "give me more",
+  "other picks",
+  "fresh",
 ];
+
+const FALLBACK_REASON_KEYS: FallbackReason[] = [
+  "external-disabled",
+  "missing-api-key",
+  "chat-rate-limited",
+  "gemini-error",
+];
+
+const aiAdvisorMetrics: AiAdvisorMetrics = {
+  totalChatRequests: 0,
+  geminiResponses: 0,
+  fallbackResponses: 0,
+  fallbackReasons: {
+    "external-disabled": 0,
+    "missing-api-key": 0,
+    "chat-rate-limited": 0,
+    "gemini-error": 0,
+  },
+  responsesWithRecommendations: 0,
+  repeatedRecommendationResponses: 0,
+};
+
+const recommendationHistoryByUser = new Map<string, { titles: string[]; createdAt: number }>();
+const chatMetricEvents: ChatMetricEvent[] = [];
+
+const emptyFallbackReasonCounters = (): Record<FallbackReason, number> => ({
+  "external-disabled": 0,
+  "missing-api-key": 0,
+  "chat-rate-limited": 0,
+  "gemini-error": 0,
+});
+
+const pruneOldChatMetricEvents = () => {
+  const cutoff = Date.now() - AI_METRICS_ROLLING_WINDOW_MS;
+  while (chatMetricEvents.length > 0 && chatMetricEvents[0].createdAt < cutoff) {
+    chatMetricEvents.shift();
+  }
+};
+
+const getRollingWindowMetrics = () => {
+  pruneOldChatMetricEvents();
+
+  const fallbackReasons = emptyFallbackReasonCounters();
+  let geminiResponses = 0;
+  let fallbackResponses = 0;
+  let responsesWithRecommendations = 0;
+  let repeatedRecommendationResponses = 0;
+
+  chatMetricEvents.forEach((event) => {
+    if (event.source === "gemini") {
+      geminiResponses += 1;
+    } else {
+      fallbackResponses += 1;
+      if (event.fallbackReason) {
+        fallbackReasons[event.fallbackReason] += 1;
+      }
+    }
+
+    if (event.hasRecommendations) {
+      responsesWithRecommendations += 1;
+    }
+    if (event.repeatedRecommendation) {
+      repeatedRecommendationResponses += 1;
+    }
+  });
+
+  const totalChatRequests = chatMetricEvents.length;
+  const geminiUsageRate = totalChatRequests > 0
+    ? Number(((geminiResponses / totalChatRequests) * 100).toFixed(2))
+    : 0;
+  const repetitionRate = responsesWithRecommendations > 0
+    ? Number(((repeatedRecommendationResponses / responsesWithRecommendations) * 100).toFixed(2))
+    : 0;
+
+  return {
+    windowMs: AI_METRICS_ROLLING_WINDOW_MS,
+    totalChatRequests,
+    geminiResponses,
+    fallbackResponses,
+    fallbackReasons,
+    responsesWithRecommendations,
+    repeatedRecommendationResponses,
+    geminiUsageRate,
+    repetitionRate,
+  };
+};
+
+const pruneOldRecommendationHistory = () => {
+  const now = Date.now();
+  Array.from(recommendationHistoryByUser.entries()).forEach(([userId, history]) => {
+    if (now - history.createdAt > AI_METRICS_HISTORY_TTL_MS) {
+      recommendationHistoryByUser.delete(userId);
+    }
+  });
+};
+
+const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationResponse) => {
+  aiAdvisorMetrics.totalChatRequests += 1;
+
+  if (response.source === "gemini") {
+    aiAdvisorMetrics.geminiResponses += 1;
+  } else {
+    aiAdvisorMetrics.fallbackResponses += 1;
+    const fallbackReason = response.debug?.fallbackReason;
+    if (fallbackReason && FALLBACK_REASON_KEYS.includes(fallbackReason)) {
+      aiAdvisorMetrics.fallbackReasons[fallbackReason] += 1;
+    }
+  }
+
+  const currentTitles = response.recommendations.map((recommendation) => recommendation.title.toLowerCase());
+  if (currentTitles.length > 0) {
+    aiAdvisorMetrics.responsesWithRecommendations += 1;
+  }
+
+  pruneOldRecommendationHistory();
+
+  const previous = recommendationHistoryByUser.get(userId);
+  let repeatedRecommendation = false;
+  if (previous && previous.titles.length > 0 && currentTitles.length > 0) {
+    const overlapCount = currentTitles.filter((title) => previous.titles.includes(title)).length;
+    const overlapThreshold = currentTitles.length >= 3 ? 2 : 1;
+    if (overlapCount >= overlapThreshold) {
+      aiAdvisorMetrics.repeatedRecommendationResponses += 1;
+      repeatedRecommendation = true;
+    }
+  }
+
+  pruneOldChatMetricEvents();
+  chatMetricEvents.push({
+    createdAt: Date.now(),
+    source: response.source,
+    fallbackReason: response.debug?.fallbackReason,
+    hasRecommendations: currentTitles.length > 0,
+    repeatedRecommendation,
+  });
+
+  recommendationHistoryByUser.set(userId, {
+    titles: currentTitles,
+    createdAt: Date.now(),
+  });
+};
+
+export const getAiAdvisorMetrics = () => {
+  const geminiUsageRate = aiAdvisorMetrics.totalChatRequests > 0
+    ? Number(((aiAdvisorMetrics.geminiResponses / aiAdvisorMetrics.totalChatRequests) * 100).toFixed(2))
+    : 0;
+  const repetitionRate = aiAdvisorMetrics.responsesWithRecommendations > 0
+    ? Number((
+      (aiAdvisorMetrics.repeatedRecommendationResponses / aiAdvisorMetrics.responsesWithRecommendations) * 100
+    ).toFixed(2))
+    : 0;
+
+  return {
+    ...aiAdvisorMetrics,
+    catalogSize: animeRecommendationCatalog.length,
+    catalogPath: activeCatalogPath,
+    catalogMtimeMs: activeCatalogMtimeMs,
+    catalogLastLoadedAt: new Date(lastCatalogLoadedAt).toISOString(),
+    geminiUsageRate,
+    repetitionRate,
+    rollingWindow: getRollingWindowMetrics(),
+  };
+};
+
+export const resetAiAdvisorMetrics = () => {
+  aiAdvisorMetrics.totalChatRequests = 0;
+  aiAdvisorMetrics.geminiResponses = 0;
+  aiAdvisorMetrics.fallbackResponses = 0;
+  aiAdvisorMetrics.responsesWithRecommendations = 0;
+  aiAdvisorMetrics.repeatedRecommendationResponses = 0;
+  FALLBACK_REASON_KEYS.forEach((reason) => {
+    aiAdvisorMetrics.fallbackReasons[reason] = 0;
+  });
+
+  recommendationHistoryByUser.clear();
+  chatMetricEvents.length = 0;
+
+  return getAiAdvisorMetrics();
+};
 
 const extractFallbackKeywords = (query: string): string[] => {
   const stopWords = new Set([
@@ -300,7 +604,8 @@ const extractRejectedAnimeTitles = (
     return [];
   }
 
-  const catalogTitles = ANIME_RECOMMENDATION_CATALOG.map((entry) => entry.title.toLowerCase());
+  maybeReloadCatalog();
+  const catalogTitles = catalogKnownTitles;
   return catalogTitles.filter((normalizedTitle) =>
     isRejectionStatementForTitle(fullText, normalizedTitle)
   );
@@ -310,17 +615,56 @@ const sanitizeRecommendations = (
   recommendations: AnimeRecommendation[],
   excludedTitles: Set<string>
 ): AnimeRecommendation[] => {
-  return recommendations.filter(
-    (recommendation) => !excludedTitles.has(recommendation.title.toLowerCase())
-  );
+  const uniqueByTitle = new Set<string>();
+
+  return recommendations
+    .filter((recommendation) => recommendation.title && recommendation.reason)
+    .map((recommendation) => ({
+      ...recommendation,
+      title: recommendation.title.trim(),
+      reason: recommendation.reason.trim(),
+      genres: normalizeList(recommendation.genres),
+      mood: recommendation.mood.trim().toLowerCase() || "balanced",
+      confidence: Math.max(1, Math.min(100, Math.round(recommendation.confidence || 60))),
+    }))
+    .filter((recommendation) => {
+      const normalizedTitle = recommendation.title.toLowerCase();
+      if (excludedTitles.has(normalizedTitle) || uniqueByTitle.has(normalizedTitle)) {
+        return false;
+      }
+      uniqueByTitle.add(normalizedTitle);
+      return true;
+    })
+    .slice(0, 5);
 };
 
 const detectTitles = (normalizedQuery: string): string[] => {
-  return KNOWN_ANIME_TITLES.filter((title) => normalizedQuery.includes(title));
+  maybeReloadCatalog();
+  const knownTitles = normalizeList([...KNOWN_ANIME_TITLES, ...catalogKnownTitles]);
+  return knownTitles.filter((title) => normalizedQuery.includes(title));
 };
 
 const detectGenres = (normalizedQuery: string): string[] => {
-  return KNOWN_GENRES.filter((genre) => normalizedQuery.includes(genre));
+  maybeReloadCatalog();
+  const knownGenres = normalizeList([...KNOWN_GENRES, ...catalogKnownGenres]);
+  return knownGenres.filter((genre) => normalizedQuery.includes(genre));
+};
+
+const userAskedForAlternatives = (message: string, history: ChatMessageInput[]): boolean => {
+  const fullText = [message, ...history.slice(-6).map((entry) => entry.text)].join(" ").toLowerCase();
+  return RECENT_ALTERNATIVE_HINTS.some((hint) => fullText.includes(hint));
+};
+
+const extractAssistantMentionedTitles = (history: ChatMessageInput[] = []): Set<string> => {
+  const assistantText = history
+    .filter((entry) => entry.role === "assistant")
+    .map((entry) => entry.text)
+    .join(" ")
+    .toLowerCase();
+
+  return new Set(
+    catalogKnownTitles.filter((title) => assistantText.includes(title))
+  );
 };
 
 const inferSentimentHint = (
@@ -445,11 +789,12 @@ const buildUserSignals = async (userId: string) => {
 
 const rankRecommendations = (
   combinedTerms: string[],
-  watchedSet: Set<string>,
+  excludedTitles: Set<string>,
   seed: string
 ): AnimeRecommendation[] => {
+  maybeReloadCatalog();
   const seedHash = hashString(seed);
-  const scored = ANIME_RECOMMENDATION_CATALOG.map((entry) => {
+  const scored = animeRecommendationCatalog.map((entry) => {
     const matchCount = combinedTerms.reduce((score, term) => {
       const inGenres = entry.genres.some((genre) => genre.includes(term) || term.includes(genre));
       const inTags = entry.tags.some((tag) => tag.includes(term) || term.includes(tag));
@@ -458,33 +803,55 @@ const rankRecommendations = (
       return score + Number(inGenres || inTags || inMoods || inTitle);
     }, 0);
 
-    // Stable tie-breaker to avoid static top picks when scores are close/zero.
     const tieBreaker = hashString(`${seedHash}:${entry.title}`) % 1000;
+    const explorationBoost = (hashString(`${seed}:explore:${entry.title}`) % 100) / 200;
 
     return {
       entry,
       matchCount,
       tieBreaker,
+      score: matchCount + explorationBoost,
     };
   })
-    .filter(({ entry }) => !watchedSet.has(entry.title.toLowerCase()))
+    .filter(({ entry }) => !excludedTitles.has(entry.title.toLowerCase()))
     .sort((a, b) => {
-      if (b.matchCount !== a.matchCount) {
-        return b.matchCount - a.matchCount;
+      if (b.score !== a.score) {
+        return b.score - a.score;
       }
       return b.tieBreaker - a.tieBreaker;
     });
 
-  const selected = (scored[0]?.matchCount ?? 0) > 0
-    ? scored.slice(0, 4)
-    : scored.slice(0, 4);
+  const topPool = scored.slice(0, Math.min(10, scored.length));
+  const selected: typeof topPool = [];
+  const usedGenres = new Set<string>();
 
-  return selected.map(({ entry, matchCount }) => ({
+  topPool.forEach((candidate) => {
+    if (selected.length >= 4) {
+      return;
+    }
+
+    const hasFreshGenre = candidate.entry.genres.some((genre) => !usedGenres.has(genre));
+    if (hasFreshGenre || selected.length < 2) {
+      selected.push(candidate);
+      candidate.entry.genres.forEach((genre) => usedGenres.add(genre));
+    }
+  });
+
+  if (selected.length < 4) {
+    topPool.forEach((candidate) => {
+      if (selected.length >= 4 || selected.some((item) => item.entry.title === candidate.entry.title)) {
+        return;
+      }
+      selected.push(candidate);
+    });
+  }
+
+  return selected.map(({ entry, matchCount, score }) => ({
     title: entry.title,
     reason: `Matches your vibe for ${entry.tags.slice(0, 2).join(" and ")} with a ${entry.moods[0]} tone.`,
     genres: entry.genres,
     mood: entry.moods[0],
-    confidence: Math.max(55, Math.min(95, 55 + matchCount * 8)),
+    confidence: Math.max(45, Math.min(97, Math.round(52 + matchCount * 7 + score * 4))),
   }));
 };
 
@@ -518,7 +885,7 @@ const buildFallbackChatRecommendations = async (
   const recommendations = rankRecommendations(
     fallbackContext.combinedTerms,
     context.excludedTitles,
-    `${payload.userId}:${normalizedMessage}:${normalizedHistory.map((entry) => entry.text).join("|")}`
+    context.responseVariantSeed
   );
   const topGenres = normalizeList(
     recommendations.flatMap((recommendation) => recommendation.genres)
@@ -572,6 +939,8 @@ const buildGeminiChatPrompt = (payload: {
   userSignals: string[];
   history: ChatMessageInput[];
   excludedTitles: string[];
+  recentAssistantTitles: string[];
+  wantsAlternatives: boolean;
 }) => {
   const historyText = payload.history
     .slice(-6)
@@ -580,6 +949,7 @@ const buildGeminiChatPrompt = (payload: {
 
   return [
     "You are an anime recommendation assistant for an anime reviews app.",
+    "Speak naturally like a human expert fan, concise but warm.",
     "Use user watched anime, preferences and recent in-app text signals to personalize recommendations.",
     "Return only valid JSON in this schema:",
     "{",
@@ -599,10 +969,15 @@ const buildGeminiChatPrompt = (payload: {
     "- Recommend 3-5 anime.",
     "- Avoid watched anime in recommendations.",
     "- Never recommend anime from the excluded list.",
+    "- If user asks for alternatives, do not repeat titles already suggested in this chat.",
+    "- Keep `reply` concise (1-3 sentences) and conversational.",
+    "- Make reasons specific (theme, pacing, tone, or character writing), not generic.",
     "- Confidence must be 1-100.",
     "- Keep titles as canonical names.",
+    `User asks for alternatives now: ${payload.wantsAlternatives ? "yes" : "no"}`,
     `User message: ${payload.message}`,
     `Watched anime: ${payload.watchedAnimes.join(", ") || "none"}`,
+    `Titles suggested earlier in this chat: ${payload.recentAssistantTitles.join(", ") || "none"}`,
     `Excluded anime (must not appear): ${payload.excludedTitles.join(", ") || "none"}`,
     `Stated preferences: ${payload.preferences.join(", ") || "none"}`,
     `User in-app signals: ${payload.userSignals.join(" || ") || "none"}`,
@@ -655,7 +1030,9 @@ const analyzeChatWithGemini = async (
   payload: ChatRecommendationRequest,
   userSignals: string[],
   fallback: ChatRecommendationResponse,
-  excludedTitles: Set<string>
+  excludedTitles: Set<string>,
+  recentAssistantTitles: string[],
+  wantsAlternatives: boolean
 ): Promise<ChatRecommendationResponse> => {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
@@ -673,6 +1050,8 @@ const analyzeChatWithGemini = async (
     userSignals,
     history: (payload.history || []).filter((entry) => entry && entry.text).slice(-8),
     excludedTitles: Array.from(excludedTitles),
+    recentAssistantTitles,
+    wantsAlternatives,
   });
 
   const response = await axios.post(
@@ -817,8 +1196,8 @@ export const analyzeAnimeQuery = async (query: string): Promise<AnimeQueryInsigh
     };
   }
 
-  const cached = queryCache.get(normalized);
-  if (cached && Date.now() - cached.createdAt < AI_CACHE_TTL_MS) {
+  const cached = getFromCacheIfFresh(queryCache, normalized, AI_CACHE_TTL_MS);
+  if (cached) {
     return cached.insights;
   }
 
@@ -832,30 +1211,30 @@ export const analyzeAnimeQuery = async (query: string): Promise<AnimeQueryInsigh
       lastExternalRequestAt = now;
       const externalInsights = await analyzeWithGemini(normalized);
 
-      queryCache.set(normalized, {
+      setCacheEntry(queryCache, normalized, {
         insights: externalInsights,
         keywords: externalInsights.keywords,
         createdAt: Date.now()
-      });
+      }, AI_QUERY_CACHE_MAX_ENTRIES);
 
       return externalInsights;
     }
 
     const fallback = buildFallbackInsights(normalized);
-    queryCache.set(normalized, {
+    setCacheEntry(queryCache, normalized, {
       insights: fallback,
       keywords: fallback.keywords,
       createdAt: Date.now()
-    });
+    }, AI_QUERY_CACHE_MAX_ENTRIES);
     return fallback;
   } catch (error) {
     console.error("Error contacting AI service:", error);
     const fallback = buildFallbackInsights(normalized);
-    queryCache.set(normalized, {
+    setCacheEntry(queryCache, normalized, {
       insights: fallback,
       keywords: fallback.keywords,
       createdAt: Date.now()
-    });
+    }, AI_QUERY_CACHE_MAX_ENTRIES);
     return fallback;
   }
 };
@@ -916,45 +1295,83 @@ export const getAnimeRecommendationChat = async (
   const preferences = normalizeList(payload.preferences);
   const history = normalizeHistory(payload.history, 20);
   const rejectedTitles = extractRejectedAnimeTitles(payload.message, payload.history || []);
-  const excludedTitles = new Set([...watched, ...rejectedTitles]);
+  const wantsAlternatives = userAskedForAlternatives(normalizedMessage, history);
+  const assistantMentionedTitles = extractAssistantMentionedTitles(history);
+  const excludedTitles = new Set([
+    ...watched,
+    ...rejectedTitles,
+    ...(wantsAlternatives ? Array.from(assistantMentionedTitles) : []),
+  ]);
+  const historyFingerprint = history
+    .slice(-8)
+    .map((entry) => `${entry.role}:${extractSemanticTerms(entry.text).slice(0, 4).join(",")}`)
+    .join("|");
+
   const cacheKey = JSON.stringify({
     userId: payload.userId,
     message: normalizedMessage,
     watched,
     preferences,
-    history,
+    historyFingerprint,
     rejectedTitles,
+    wantsAlternatives,
   });
 
-  const cached = chatCache.get(cacheKey);
-  if (cached && Date.now() - cached.createdAt < AI_CHAT_CACHE_TTL_MS) {
+  const canUseCache = !wantsAlternatives;
+  const cached = canUseCache
+    ? getFromCacheIfFresh(chatCache, cacheKey, AI_CHAT_CACHE_TTL_MS)
+    : null;
+  if (cached) {
+    recordChatOutcomeMetrics(payload.userId, cached.response);
     return cached.response;
   }
 
   const signals = await buildUserSignals(payload.userId);
-  const fallback = await buildFallbackChatRecommendations(payload, { excludedTitles });
+  const seedWindow = Math.floor(Date.now() / Math.max(AI_CHAT_VARIATION_WINDOW_MS, 5000));
+  const responseVariantSeed = [
+    payload.userId,
+    normalizedMessage,
+    historyFingerprint,
+    String(seedWindow),
+    wantsAlternatives ? "alt" : "default",
+  ].join(":");
 
-  const now = Date.now();
-  const lastForRequest = lastChatExternalRequestAtByRequest.get(cacheKey) || 0;
+  const fallback = await buildFallbackChatRecommendations(payload, {
+    excludedTitles,
+    responseVariantSeed,
+  });
+
   const externalEnabled = process.env.AI_EXTERNAL_ENABLED === "true";
   const hasGeminiApiKey = Boolean(process.env.GEMINI_API_KEY);
-  const isRateLimited = now - lastForRequest < AI_CHAT_MIN_INTERVAL_MS;
-  const shouldCallExternal =
-    externalEnabled &&
-    hasGeminiApiKey &&
-    !isRateLimited;
 
   try {
-    if (shouldCallExternal) {
-      lastChatExternalRequestAtByRequest.set(cacheKey, now);
-      const result = await analyzeChatWithGemini(payload, signals.snippets, fallback, excludedTitles);
-      chatCache.set(cacheKey, { response: result, createdAt: Date.now() });
+    if (externalEnabled && hasGeminiApiKey) {
+      const result = await analyzeChatWithGemini(
+        payload,
+        signals.snippets,
+        fallback,
+        excludedTitles,
+        Array.from(assistantMentionedTitles),
+        wantsAlternatives
+      );
+      if (canUseCache) {
+        setCacheEntry(chatCache, cacheKey, { response: result, createdAt: Date.now() }, AI_CHAT_CACHE_MAX_ENTRIES);
+      }
+      recordChatOutcomeMetrics(payload.userId, result);
       return result;
     }
   } catch (error) {
     console.error("Error contacting Gemini for recommendation chat:", error);
     const fallbackWithReason = withFallbackReason(fallback, "gemini-error");
-    chatCache.set(cacheKey, { response: fallbackWithReason, createdAt: Date.now() });
+    if (canUseCache) {
+      setCacheEntry(
+        chatCache,
+        cacheKey,
+        { response: fallbackWithReason, createdAt: Date.now() },
+        AI_CHAT_CACHE_MAX_ENTRIES
+      );
+    }
+    recordChatOutcomeMetrics(payload.userId, fallbackWithReason);
     return fallbackWithReason;
   }
 
@@ -962,9 +1379,17 @@ export const getAnimeRecommendationChat = async (
     ? "external-disabled"
     : !hasGeminiApiKey
       ? "missing-api-key"
-      : "chat-rate-limited";
+      : "gemini-error";
 
   const fallbackWithReason = withFallbackReason(fallback, fallbackReason);
-  chatCache.set(cacheKey, { response: fallbackWithReason, createdAt: Date.now() });
+  if (canUseCache) {
+    setCacheEntry(
+      chatCache,
+      cacheKey,
+      { response: fallbackWithReason, createdAt: Date.now() },
+      AI_CHAT_CACHE_MAX_ENTRIES
+    );
+  }
+  recordChatOutcomeMetrics(payload.userId, fallbackWithReason);
   return fallbackWithReason;
 };

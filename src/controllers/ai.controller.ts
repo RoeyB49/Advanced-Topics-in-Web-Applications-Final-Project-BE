@@ -1,6 +1,35 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
-import { getAnimeRecommendationChat } from "../services/ai.service";
+import {
+  getAiAdvisorMetrics,
+  getAnimeRecommendationChat,
+  resetAiAdvisorMetrics,
+} from "../services/ai.service";
+
+const getMetricsAdmins = (): string[] => {
+  return (process.env.AI_METRICS_ADMIN_USERS || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const AI_METRICS_STRICT_ADMIN_MODE = process.env.AI_METRICS_STRICT_ADMIN_MODE === "true";
+if (AI_METRICS_STRICT_ADMIN_MODE && getMetricsAdmins().length === 0) {
+  throw new Error("AI_METRICS_STRICT_ADMIN_MODE is enabled but AI_METRICS_ADMIN_USERS is empty");
+}
+
+const isMetricsAdmin = (req: AuthRequest): boolean => {
+  const admins = getMetricsAdmins();
+  if (!admins.length) {
+    return false;
+  }
+
+  const userId = req.user?._id?.toString().toLowerCase() || "";
+  const username = String(req.user?.username || "").toLowerCase();
+  const email = String(req.user?.email || "").toLowerCase();
+
+  return admins.includes(userId) || admins.includes(username) || admins.includes(email);
+};
 
 /**
  * @swagger
@@ -84,4 +113,65 @@ export const recommendationChat = async (
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
+};
+
+/**
+ * @swagger
+ * /api/ai/recommendations/metrics:
+ *   get:
+ *     summary: Get in-memory advisor observability metrics
+ *     tags: [AI]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Advisor metrics snapshot
+ *       401:
+ *         description: Unauthorized
+ */
+export const recommendationMetrics = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  const userId = req.user?._id?.toString();
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return;
+  }
+
+  res.status(200).json(getAiAdvisorMetrics());
+};
+
+/**
+ * @swagger
+ * /api/ai/recommendations/metrics/reset:
+ *   post:
+ *     summary: Reset in-memory advisor observability metrics (admin only)
+ *     tags: [AI]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Advisor metrics reset snapshot
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+export const resetRecommendationMetrics = async (
+  req: AuthRequest,
+  res: Response
+): Promise<void> => {
+  const userId = req.user?._id?.toString();
+  if (!userId) {
+    res.status(401).json({ message: "Unauthorized" });
+    return;
+  }
+
+  if (!isMetricsAdmin(req)) {
+    res.status(403).json({ message: "Forbidden" });
+    return;
+  }
+
+  res.status(200).json(resetAiAdvisorMetrics());
 };
