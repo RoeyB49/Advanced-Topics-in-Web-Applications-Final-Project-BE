@@ -1,0 +1,813 @@
+[
+  {
+    "title": "Attack on Titan",
+    "genres": [
+      "action",
+      "drama",
+      "thriller"
+    ],
+    "moods": [
+      "intense",
+      "dark"
+    ],
+    "tags": [
+      "war",
+      "twists",
+      "strategy",
+      "survival"
+    ]
+  },
+  {
+    "title": "Fullmetal Alchemist: Brotherhood",
+    "genres": [
+      "action",
+      "adventure",
+      "drama"
+    ],
+    "moods": [
+      "emotional",
+      "balanced"
+    ],
+    "tags": [
+      "brothers",
+      "alchemy",
+      "worldbuilding",
+      "character growth"
+    ]
+  },
+  {
+    "title": "Steins;Gate",
+    "genres": [
+      "sci-fi",
+      "thriller",
+      "drama"
+    ],
+    "moods": [
+      "mind-bending",
+      "tense"
+    ],
+    "tags": [
+      "time travel",
+      "mystery",
+      "plot twists"
+    ]
+  },
+  {
+    "title": "Haikyuu!!",
+    "genres": [
+      "sports",
+      "comedy",
+      "drama"
+    ],
+    "moods": [
+      "motivational",
+      "uplifting"
+    ],
+    "tags": [
+      "teamwork",
+      "character growth",
+      "competition"
+    ]
+  },
+  {
+    "title": "Vinland Saga",
+    "genres": [
+      "action",
+      "drama",
+      "seinen"
+    ],
+    "moods": [
+      "serious",
+      "reflective"
+    ],
+    "tags": [
+      "revenge",
+      "historical",
+      "war",
+      "mature"
+    ]
+  },
+  {
+    "title": "Kaguya-sama: Love Is War",
+    "genres": [
+      "romance",
+      "comedy"
+    ],
+    "moods": [
+      "fun",
+      "light"
+    ],
+    "tags": [
+      "romcom",
+      "mind games",
+      "school"
+    ]
+  },
+  {
+    "title": "Monster",
+    "genres": [
+      "mystery",
+      "thriller",
+      "seinen"
+    ],
+    "moods": [
+      "dark",
+      "psychological"
+    ],
+    "tags": [
+      "slow burn",
+      "crime",
+      "moral conflict"
+    ]
+  },
+  {
+    "title": "Mob Psycho 100",
+    "genres": [
+      "action",
+      "comedy",
+      "slice of life"
+    ],
+    "moods": [
+      "heartfelt",
+      "energetic"
+    ],
+    "tags": [
+      "supernatural",
+      "character growth",
+      "funny"
+    ]
+  },
+  {
+    "title": "Death Note",
+    "genres": [
+      "thriller",
+      "mystery"
+    ],
+    "moods": [
+      "dark",
+      "strategic"
+    ],
+    "tags": [
+      "cat and mouse",
+      "mind games",
+      "moral gray"
+    ]
+  },
+  {
+    "title": "Frieren: Beyond Journey's End",
+    "genres": [
+      "fantasy",
+      "drama",
+      "adventure"
+    ],
+    "moods": [
+      "calm",
+      "emotional"
+    ],
+    "tags": [
+      "journey",
+      "reflection",
+      "character driven"
+    ]
+  },
+  {
+    "title": "Jujutsu Kaisen",
+    "genres": [
+      "action",
+      "shonen",
+      "fantasy"
+    ],
+    "moods": [
+      "intense",
+      "stylish"
+    ],
+    "tags": [
+      "curses",
+      "fights",
+      "dark fantasy"
+    ]
+  },
+  {
+    "title": "Demon Slayer",
+    "genres": [
+      "action",
+      "adventure",
+      "shonen"
+    ],
+    "moods": [
+      "emotional",
+      "intense"
+    ],
+    "tags": [
+      "demons",
+      "sword fights",
+      "family"
+    ]
+  },
+  {
+    "title": "Chainsaw Man",
+    "genres": [
+      "action",
+      "horror",
+      "shonen"
+    ],
+    "moods": [
+      "chaotic",
+      "dark"
+    ],
+    "tags": [
+      "devils",
+      "violent",
+      "unpredictable"
+    ]
+  },
+  {
+    "title": "Code Geass",
+    "genres": [
+      "mecha",
+      "thriller",
+      "drama"
+    ],
+    "moods": [
+      "strategic",
+      "dramatic"
+    ],
+    "tags": [
+      "rebellion",
+      "mind games",
+      "politics"
+    ]
+  },
+  {
+    "title": "Psycho-Pass",
+    "genres": [
+      "sci-fi",
+      "thriller",
+      "mystery"
+    ],
+    "moods": [
+      "dark",
+      "tense"
+    ],
+    "tags": [
+      "crime",
+      "future",
+      "moral conflict"
+    ]
+  },
+  {
+    "title": "Parasyte: The Maxim",
+    "genres": [
+      "horror",
+      "action",
+      "drama"
+    ],
+    "moods": [
+      "dark",
+      "intense"
+    ],
+    "tags": [
+      "body horror",
+      "identity",
+      "survival"
+    ]
+  },
+  {
+    "title": "Erased",
+    "genres": [
+      "mystery",
+      "thriller",
+      "drama"
+    ],
+    "moods": [
+      "emotional",
+      "suspenseful"
+    ],
+    "tags": [
+      "time travel",
+      "investigation",
+      "childhood"
+    ]
+  },
+  {
+    "title": "86",
+    "genres": [
+      "sci-fi",
+      "drama",
+      "action"
+    ],
+    "moods": [
+      "serious",
+      "emotional"
+    ],
+    "tags": [
+      "war",
+      "mecha",
+      "tragedy"
+    ]
+  },
+  {
+    "title": "Blue Lock",
+    "genres": [
+      "sports",
+      "drama",
+      "thriller"
+    ],
+    "moods": [
+      "intense",
+      "competitive"
+    ],
+    "tags": [
+      "soccer",
+      "ego",
+      "rivalry"
+    ]
+  },
+  {
+    "title": "Kuroko's Basketball",
+    "genres": [
+      "sports",
+      "comedy",
+      "drama"
+    ],
+    "moods": [
+      "hype",
+      "fun"
+    ],
+    "tags": [
+      "basketball",
+      "teamwork",
+      "rivalries"
+    ]
+  },
+  {
+    "title": "Your Lie in April",
+    "genres": [
+      "drama",
+      "romance"
+    ],
+    "moods": [
+      "emotional",
+      "melancholic"
+    ],
+    "tags": [
+      "music",
+      "healing",
+      "coming of age"
+    ]
+  },
+  {
+    "title": "A Silent Voice",
+    "genres": [
+      "drama",
+      "romance",
+      "slice of life"
+    ],
+    "moods": [
+      "emotional",
+      "reflective"
+    ],
+    "tags": [
+      "redemption",
+      "school",
+      "relationships"
+    ]
+  },
+  {
+    "title": "Horimiya",
+    "genres": [
+      "romance",
+      "comedy",
+      "slice of life"
+    ],
+    "moods": [
+      "light",
+      "warm"
+    ],
+    "tags": [
+      "school",
+      "character chemistry",
+      "comfort"
+    ]
+  },
+  {
+    "title": "Toradora!",
+    "genres": [
+      "romance",
+      "comedy",
+      "drama"
+    ],
+    "moods": [
+      "fun",
+      "emotional"
+    ],
+    "tags": [
+      "romcom",
+      "school",
+      "character growth"
+    ]
+  },
+  {
+    "title": "The Apothecary Diaries",
+    "genres": [
+      "mystery",
+      "drama"
+    ],
+    "moods": [
+      "calm",
+      "clever"
+    ],
+    "tags": [
+      "court intrigue",
+      "medicine",
+      "deduction"
+    ]
+  },
+  {
+    "title": "Odd Taxi",
+    "genres": [
+      "mystery",
+      "thriller",
+      "drama"
+    ],
+    "moods": [
+      "quirky",
+      "tense"
+    ],
+    "tags": [
+      "crime",
+      "dialogue",
+      "twists"
+    ]
+  },
+  {
+    "title": "Bocchi the Rock!",
+    "genres": [
+      "comedy",
+      "slice of life"
+    ],
+    "moods": [
+      "fun",
+      "uplifting"
+    ],
+    "tags": [
+      "music",
+      "social anxiety",
+      "friendship"
+    ]
+  },
+  {
+    "title": "Spy x Family",
+    "genres": [
+      "comedy",
+      "action",
+      "slice of life"
+    ],
+    "moods": [
+      "light",
+      "heartfelt"
+    ],
+    "tags": [
+      "family",
+      "spy",
+      "assassin"
+    ]
+  },
+  {
+    "title": "Mob Psycho 100 II",
+    "genres": [
+      "action",
+      "comedy",
+      "slice of life"
+    ],
+    "moods": [
+      "energetic",
+      "heartfelt"
+    ],
+    "tags": [
+      "supernatural",
+      "growth",
+      "friendship"
+    ]
+  },
+  {
+    "title": "Made in Abyss",
+    "genres": [
+      "adventure",
+      "fantasy",
+      "mystery"
+    ],
+    "moods": [
+      "dark",
+      "mysterious"
+    ],
+    "tags": [
+      "worldbuilding",
+      "journey",
+      "survival"
+    ]
+  },
+  {
+    "title": "Re:ZERO",
+    "genres": [
+      "isekai",
+      "drama",
+      "thriller"
+    ],
+    "moods": [
+      "tense",
+      "emotional"
+    ],
+    "tags": [
+      "time loop",
+      "fantasy",
+      "character suffering"
+    ]
+  },
+  {
+    "title": "Mushoku Tensei",
+    "genres": [
+      "isekai",
+      "fantasy",
+      "drama"
+    ],
+    "moods": [
+      "immersive",
+      "emotional"
+    ],
+    "tags": [
+      "adventure",
+      "worldbuilding",
+      "magic"
+    ]
+  },
+  {
+    "title": "Konosuba",
+    "genres": [
+      "isekai",
+      "comedy",
+      "fantasy"
+    ],
+    "moods": [
+      "funny",
+      "light"
+    ],
+    "tags": [
+      "parody",
+      "party",
+      "chaos"
+    ]
+  },
+  {
+    "title": "Cowboy Bebop",
+    "genres": [
+      "sci-fi",
+      "action",
+      "drama"
+    ],
+    "moods": [
+      "cool",
+      "melancholic"
+    ],
+    "tags": [
+      "space",
+      "bounty hunters",
+      "episodic"
+    ]
+  },
+  {
+    "title": "Samurai Champloo",
+    "genres": [
+      "action",
+      "adventure",
+      "comedy"
+    ],
+    "moods": [
+      "stylish",
+      "chill"
+    ],
+    "tags": [
+      "samurai",
+      "road trip",
+      "hip hop"
+    ]
+  },
+  {
+    "title": "Neon Genesis Evangelion",
+    "genres": [
+      "mecha",
+      "drama",
+      "mystery"
+    ],
+    "moods": [
+      "psychological",
+      "dark"
+    ],
+    "tags": [
+      "existential",
+      "trauma",
+      "apocalypse"
+    ]
+  },
+  {
+    "title": "Gurren Lagann",
+    "genres": [
+      "mecha",
+      "action",
+      "adventure"
+    ],
+    "moods": [
+      "hype",
+      "inspiring"
+    ],
+    "tags": [
+      "determination",
+      "team",
+      "epic"
+    ]
+  },
+  {
+    "title": "One Punch Man",
+    "genres": [
+      "action",
+      "comedy"
+    ],
+    "moods": [
+      "fun",
+      "energetic"
+    ],
+    "tags": [
+      "superheroes",
+      "satire",
+      "battles"
+    ]
+  },
+  {
+    "title": "Hunter x Hunter",
+    "genres": [
+      "action",
+      "adventure",
+      "shonen"
+    ],
+    "moods": [
+      "adventurous",
+      "intense"
+    ],
+    "tags": [
+      "strategy",
+      "friendship",
+      "power system"
+    ]
+  },
+  {
+    "title": "Naruto",
+    "genres": [
+      "action",
+      "adventure",
+      "shonen"
+    ],
+    "moods": [
+      "motivational",
+      "nostalgic"
+    ],
+    "tags": [
+      "ninjas",
+      "friendship",
+      "training"
+    ]
+  },
+  {
+    "title": "One Piece",
+    "genres": [
+      "action",
+      "adventure",
+      "comedy"
+    ],
+    "moods": [
+      "fun",
+      "epic"
+    ],
+    "tags": [
+      "pirates",
+      "worldbuilding",
+      "crew"
+    ]
+  },
+  {
+    "title": "Bleach",
+    "genres": [
+      "action",
+      "adventure",
+      "shonen"
+    ],
+    "moods": [
+      "stylish",
+      "intense"
+    ],
+    "tags": [
+      "spirits",
+      "swords",
+      "battles"
+    ]
+  },
+  {
+    "title": "My Hero Academia",
+    "genres": [
+      "action",
+      "comedy",
+      "shonen"
+    ],
+    "moods": [
+      "inspiring",
+      "energetic"
+    ],
+    "tags": [
+      "superheroes",
+      "school",
+      "teamwork"
+    ]
+  },
+  {
+    "title": "Dr. Stone",
+    "genres": [
+      "adventure",
+      "sci-fi",
+      "shonen"
+    ],
+    "moods": [
+      "clever",
+      "uplifting"
+    ],
+    "tags": [
+      "science",
+      "survival",
+      "rebuilding"
+    ]
+  },
+  {
+    "title": "Bungo Stray Dogs",
+    "genres": [
+      "action",
+      "mystery",
+      "comedy"
+    ],
+    "moods": [
+      "stylish",
+      "quirky"
+    ],
+    "tags": [
+      "detectives",
+      "superpowers",
+      "mafia"
+    ]
+  },
+  {
+    "title": "Classroom of the Elite",
+    "genres": [
+      "thriller",
+      "drama"
+    ],
+    "moods": [
+      "strategic",
+      "cold"
+    ],
+    "tags": [
+      "mind games",
+      "school",
+      "manipulation"
+    ]
+  },
+  {
+    "title": "Pluto",
+    "genres": [
+      "sci-fi",
+      "mystery",
+      "drama"
+    ],
+    "moods": [
+      "serious",
+      "reflective"
+    ],
+    "tags": [
+      "robots",
+      "detective",
+      "philosophical"
+    ]
+  },
+  {
+    "title": "Solo Leveling",
+    "genres": [
+      "action",
+      "fantasy"
+    ],
+    "moods": [
+      "hype",
+      "dark"
+    ],
+    "tags": [
+      "dungeons",
+      "power fantasy",
+      "monsters"
+    ]
+  }
+]

@@ -40,3 +40,39 @@ npm run dev
 ## Notes
 
 - Environment variables are required (`.env`)
+
+## AI advisor configuration
+
+The recommendation chat now supports a dedicated catalog data file plus runtime observability.
+
+Useful environment variables:
+
+- `AI_EXTERNAL_ENABLED` (`true`/`false`) - enables Gemini calls.
+- `GEMINI_API_KEY` - Gemini API key.
+- `AI_CATALOG_PATH` - optional absolute/relative path to catalog JSON. Default loader checks:
+  - `src/data/anime-catalog.json`
+  - `dist/data/anime-catalog.json`
+  - `../data/anime-catalog.json` relative to `ai.service` runtime folder
+- Catalog hot-reload is mtime-based: changes are detected automatically when the file timestamp changes.
+- `AI_QUERY_CACHE_MAX_ENTRIES` - max query cache entries (default: `400`).
+- `AI_CHAT_CACHE_MAX_ENTRIES` - max chat cache entries (default: `400`).
+- `AI_CHAT_CACHE_TTL_MS` - chat cache TTL in milliseconds.
+- `AI_CHAT_VARIATION_WINDOW_MS` - diversity seed window for fallback variation (default: `120000`).
+- `AI_METRICS_ROLLING_WINDOW_MS` - rolling metrics window in milliseconds (default: `900000` = 15 minutes).
+- `AI_METRICS_ADMIN_USERS` - comma-separated admin identifiers (email/username/userId) allowed to reset metrics.
+- `AI_METRICS_STRICT_ADMIN_MODE` (`true`/`false`) - when `true`, app startup fails if `AI_METRICS_ADMIN_USERS` is empty.
+
+### AI observability endpoint
+
+Authenticated endpoint:
+
+- `GET /api/ai/recommendations/metrics`
+- `POST /api/ai/recommendations/metrics/reset` (admin only)
+
+Returns an in-memory snapshot with:
+
+- total chat requests
+- Gemini usage percentage
+- fallback reason counters
+- recommendation repetition rate
+- catalog size and last successful catalog load time

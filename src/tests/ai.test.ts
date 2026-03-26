@@ -1,5 +1,8 @@
 import request from "supertest";
 import axios from "axios";
+import fs from "fs";
+import os from "os";
+import path from "path";
 import { app } from "../app";
 
 jest.mock("axios");
@@ -102,6 +105,33 @@ describe("AI Endpoints", () => {
     expect(res.status).toBe(200);
     const titles = res.body.recommendations.map((item: { title: string }) => item.title);
     expect(titles).not.toContain("Death Note");
+  });
+
+  it("should avoid repeating previous assistant picks when user asks for something else", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "give me something else",
+        watchedAnimes: [],
+        preferences: ["thriller", "mystery"],
+        history: [
+          {
+            role: "assistant",
+            text: "Try Monster, Death Note, and Steins;Gate.",
+          },
+          {
+            role: "user",
+            text: "nice but I already saw those",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    const titles = res.body.recommendations.map((item: { title: string }) => item.title);
+    expect(titles).not.toContain("Monster");
+    expect(titles).not.toContain("Death Note");
+    expect(titles).not.toContain("Steins;Gate");
   });
 
   it("should return gemini recommendations when external AI is enabled", async () => {
@@ -336,5 +366,143 @@ describe("AI Endpoints", () => {
 
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty("message", "message is required");
+  });
+
+  it("should expose advisor metrics for authenticated users", async () => {
+    await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend thriller anime",
+        watchedAnimes: [],
+        preferences: ["thriller"],
+      });
+
+    const metricsRes = await request(app)
+      .get("/api/ai/recommendations/metrics")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(metricsRes.status).toBe(200);
+    expect(metricsRes.body).toHaveProperty("totalChatRequests");
+    expect(metricsRes.body).toHaveProperty("geminiUsageRate");
+    expect(metricsRes.body).toHaveProperty("repetitionRate");
+    expect(metricsRes.body).toHaveProperty("fallbackReasons");
+    expect(metricsRes.body).toHaveProperty("catalogSize");
+    expect(metricsRes.body).toHaveProperty("rollingWindow");
+    expect(metricsRes.body.rollingWindow).toHaveProperty("windowMs");
+    expect(metricsRes.body.rollingWindow).toHaveProperty("totalChatRequests");
+    expect(metricsRes.body.rollingWindow).toHaveProperty("geminiUsageRate");
+    expect(metricsRes.body.rollingWindow.totalChatRequests).toBeGreaterThan(0);
+    expect(metricsRes.body.totalChatRequests).toBeGreaterThan(0);
+    expect(metricsRes.body.catalogSize).toBeGreaterThan(0);
+  });
+
+  it("should reset advisor metrics only for admin users", async () => {
+    process.env.AI_METRICS_ADMIN_USERS = "aireco@example.com";
+
+    await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend action anime",
+        watchedAnimes: [],
+        preferences: ["action"],
+      });
+
+    const nonAdminAuth = await request(app).post("/api/auth/register").send({
+      username: "nonadminuser",
+      email: "nonadmin@example.com",
+      password: "password123",
+    });
+    const nonAdminToken = nonAdminAuth.body.accessToken;
+
+    const forbiddenRes = await request(app)
+      .post("/api/ai/recommendations/metrics/reset")
+      .set("Authorization", `Bearer ${nonAdminToken}`)
+      .send({});
+
+    expect(forbiddenRes.status).toBe(403);
+
+    const resetRes = await request(app)
+      .post("/api/ai/recommendations/metrics/reset")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({});
+
+    expect(resetRes.status).toBe(200);
+    expect(resetRes.body).toHaveProperty("totalChatRequests", 0);
+    expect(resetRes.body).toHaveProperty("geminiResponses", 0);
+    expect(resetRes.body).toHaveProperty("fallbackResponses", 0);
+    expect(resetRes.body).toHaveProperty("rollingWindow.totalChatRequests", 0);
+
+    delete process.env.AI_METRICS_ADMIN_USERS;
+  });
+
+  it("should hot-reload catalog when file mtime changes", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "anime-catalog-"));
+    const tempCatalogPath = path.join(tempDir, "catalog.json");
+    const catalogV1 = [
+      {
+        title: "Temp Anime One",
+        genres: ["action"],
+        moods: ["intense"],
+        tags: ["test"],
+      },
+    ];
+    const catalogV2 = [
+      {
+        title: "Temp Anime One",
+        genres: ["action"],
+        moods: ["intense"],
+        tags: ["test"],
+      },
+      {
+        title: "Temp Anime Two",
+        genres: ["drama"],
+        moods: ["serious"],
+        tags: ["test"],
+      },
+    ];
+
+    process.env.AI_CATALOG_PATH = tempCatalogPath;
+    fs.writeFileSync(tempCatalogPath, `${JSON.stringify(catalogV1, null, 2)}\n`, "utf8");
+
+    await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend me action anime",
+        watchedAnimes: [],
+        preferences: ["action"],
+      });
+
+    const firstMetrics = await request(app)
+      .get("/api/ai/recommendations/metrics")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(firstMetrics.status).toBe(200);
+    expect(firstMetrics.body).toHaveProperty("catalogSize", 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fs.writeFileSync(tempCatalogPath, `${JSON.stringify(catalogV2, null, 2)}\n`, "utf8");
+
+    await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend me drama anime",
+        watchedAnimes: [],
+        preferences: ["drama"],
+      });
+
+    const secondMetrics = await request(app)
+      .get("/api/ai/recommendations/metrics")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(secondMetrics.status).toBe(200);
+    expect(secondMetrics.body).toHaveProperty("catalogSize", 2);
+    expect(String(secondMetrics.body.catalogPath || "")).toContain("catalog.json");
+
+    delete process.env.AI_CATALOG_PATH;
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
