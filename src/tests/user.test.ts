@@ -17,10 +17,20 @@ describe("User Endpoints", () => {
   });
 
   it("should get all users", async () => {
-    const res = await request(app).get("/api/users");
+    const res = await request(app)
+      .get("/api/users")
+      .set("Authorization", `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body[0]).not.toHaveProperty("email");
+    expect(res.body[0]).not.toHaveProperty("password");
+  });
+
+  it("should not get all users without token", async () => {
+    const res = await request(app).get("/api/users");
+
+    expect(res.status).toBe(401);
   });
 
   it("should get current user profile with posts", async () => {
@@ -36,12 +46,21 @@ describe("User Endpoints", () => {
   });
 
   it("should get user by id with posts", async () => {
-    const res = await request(app).get(`/api/users/${userId}`);
+    const res = await request(app)
+      .get(`/api/users/${userId}`)
+      .set("Authorization", `Bearer ${accessToken}`);
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("user");
     expect(res.body).toHaveProperty("posts");
     expect(res.body.user).toHaveProperty("username", "testuser");
+    expect(res.body.user).not.toHaveProperty("email");
+  });
+
+  it("should not get user by id without token", async () => {
+    const res = await request(app).get(`/api/users/${userId}`);
+
+    expect(res.status).toBe(401);
   });
 
   it("should update only own user profile", async () => {

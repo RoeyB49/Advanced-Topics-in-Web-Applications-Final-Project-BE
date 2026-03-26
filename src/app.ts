@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import express, { Express } from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
 import fs from "fs";
@@ -15,6 +16,7 @@ import path from "path";
 dotenv.config();
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
 
 const swaggerServerUrl = process.env.SWAGGER_SERVER_URL || "/";
 
@@ -24,6 +26,13 @@ const configuredOrigins = (process.env.FRONTEND_ORIGINS || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins;
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: isProduction ? 80 : 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many authentication attempts, please try again later." },
+});
 
 // Middleware
 app.use(
@@ -67,41 +76,43 @@ const swaggerOptions = {
   apis: ["./src/routes/*.ts", "./src/controllers/*.ts"],
 };
 
-const swaggerDocs = swaggerJsdoc(swaggerOptions);
+if (!isProduction) {
+  const swaggerDocs = swaggerJsdoc(swaggerOptions);
 
-app.get("/api-docs.json", (req, res) => {
-  const configuredUrl = process.env.SWAGGER_SERVER_URL?.trim();
-  const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0].trim();
-  const protocol = forwardedProto || req.protocol;
-  const host = req.get("host");
-  const requestBasedUrl = host ? `${protocol}://${host}` : "/";
-  const resolvedUrl = configuredUrl || requestBasedUrl;
+  app.get("/api-docs.json", (req, res) => {
+    const configuredUrl = process.env.SWAGGER_SERVER_URL?.trim();
+    const forwardedProto = req.header("x-forwarded-proto")?.split(",")[0].trim();
+    const protocol = forwardedProto || req.protocol;
+    const host = req.get("host");
+    const requestBasedUrl = host ? `${protocol}://${host}` : "/";
+    const resolvedUrl = configuredUrl || requestBasedUrl;
 
-  res.json({
-    ...swaggerDocs,
-    servers: [
-      {
-        url: resolvedUrl,
-        description: configuredUrl ? "Configured server" : "Current server",
-      },
-    ],
+    res.json({
+      ...swaggerDocs,
+      servers: [
+        {
+          url: resolvedUrl,
+          description: configuredUrl ? "Configured server" : "Current server",
+        },
+      ],
+    });
   });
-});
 
-app.use(
-  "/api-docs",
-  swaggerUi.serve,
-  swaggerUi.setup(undefined, {
-    swaggerOptions: {
-      url: "/api-docs.json",
-    },
-  })
-);
+  app.use(
+    "/api-docs",
+    swaggerUi.serve,
+    swaggerUi.setup(undefined, {
+      swaggerOptions: {
+        url: "/api-docs.json",
+      },
+    })
+  );
+}
 
 // Routes
 app.use("/api/posts", postRoutes);
 app.use("/api/posts/:postId/comments", commentRoutes);
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", authLimiter, authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/ai", aiRoutes);
 
@@ -122,7 +133,7 @@ app.get("/api/health", (req, res) => {
   res.json({
     message: "Advanced Topics in Web Applications - API is running",
     version: "1.0.0",
-    documentation: `/api-docs`,
+    documentation: isProduction ? null : `/api-docs`,
     frontendServed: hasFrontendBuild,
   });
 });

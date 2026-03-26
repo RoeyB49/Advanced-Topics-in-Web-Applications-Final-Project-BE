@@ -272,7 +272,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
 export const socialAuth = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { provider, token, providerId, email, username, profileImage } = req.body;
+    const { provider, token } = req.body;
 
     if (!["google", "facebook"].includes(provider)) {
       res.status(400).json({ message: "provider must be google or facebook" });
@@ -281,24 +281,15 @@ export const socialAuth = async (req: Request, res: Response): Promise<void> => 
 
     let socialProfile: SocialProfile;
 
-    if (token) {
-      socialProfile =
-        provider === "google"
-          ? await verifyGoogleToken(token)
-          : await verifyFacebookToken(token);
-    } else {
-      if (!providerId || !email || !username) {
-        res.status(400).json({ message: "provider token is required" });
-        return;
-      }
-
-      socialProfile = {
-        providerId,
-        email,
-        username,
-        profileImage,
-      };
+    if (!token) {
+      res.status(400).json({ message: "provider token is required" });
+      return;
     }
+
+    socialProfile =
+      provider === "google"
+        ? await verifyGoogleToken(token)
+        : await verifyFacebookToken(token);
 
     const storedProfileImage = await persistExternalProfileImage(
       socialProfile.profileImage,

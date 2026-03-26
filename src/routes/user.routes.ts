@@ -18,11 +18,15 @@ const router = express.Router();
  *   get:
  *     summary: Get all users
  *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: List of users
+ *       401:
+ *         description: Unauthorized
  */
-router.get("/", userController.getAllUsers);
+router.get("/", authMiddleware, userController.getAllUsers);
 
 /**
  * @swagger
@@ -46,6 +50,8 @@ router.get("/profile", authMiddleware, userController.getProfile);
  *   get:
  *     summary: Get user by ID
  *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
@@ -55,10 +61,12 @@ router.get("/profile", authMiddleware, userController.getProfile);
  *     responses:
  *       200:
  *         description: User details
+ *       401:
+ *         description: Unauthorized
  *       404:
  *         description: User not found
  */
-router.get("/:id", userController.getUserById);
+router.get("/:id", authMiddleware, userController.getUserById);
 
 /**
  * @swagger

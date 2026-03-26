@@ -67,7 +67,7 @@ describe("Auth Endpoints", () => {
       mockedAxios.get.mockReset();
     });
 
-    it("should login/register using social provider", async () => {
+    it("should reject social auth without provider token", async () => {
       const res = await request(app).post("/api/auth/social").send({
         provider: "google",
         providerId: "google-user-1",
@@ -75,10 +75,8 @@ describe("Auth Endpoints", () => {
         email: "social@example.com"
       });
 
-      expect(res.status).toBe(200);
-      expect(res.body).toHaveProperty("accessToken");
-      expect(res.body).toHaveProperty("refreshToken");
-      expect(res.body.user).toHaveProperty("provider", "google");
+      expect(res.status).toBe(400);
+      expect(res.body).toHaveProperty("message", "provider token is required");
     });
 
     it("should login/register with a valid Google token using mocked verification", async () => {
