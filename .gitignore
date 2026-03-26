@@ -75,6 +75,12 @@ web_modules/
 .env.test.local
 .env.production.local
 .env.local
+.envprod
+
+# TLS certificates (must stay outside repository)
+*.pem
+*.crt
+*.key
 
 # parcel-bundler cache files
 .cache

@@ -3,7 +3,6 @@ import express, { Express } from "express";
 import cors from "cors";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
-import connectDB from "./config/db";
 import postRoutes from "./routes/post.routes";
 import commentRoutes from "./routes/comment.routes";
 import authRoutes from "./routes/auth.routes";
@@ -78,20 +77,7 @@ app.get("/", (req, res) => {
 });
 
 if (process.env.NODE_ENV !== "test") {
-  connectDB();
-  const PORT = process.env.PORT || 3001;
-  app.listen(PORT, () => {
-    const hasAccessSecret = Boolean(process.env.ACCESS_TOKEN_SECRET);
-    const hasRefreshSecret = Boolean(process.env.REFRESH_TOKEN_SECRET);
-
-    console.log(`Server running on port ${PORT}`);
-    console.log(
-      `Auth secrets loaded: access=${hasAccessSecret ? "yes" : "no"}, refresh=${hasRefreshSecret ? "yes" : "no"}`
-    );
-    console.log(
-      `Swagger documentation available at http://localhost:${PORT}/api-docs`
-    );
-  });
+  // Server startup is handled in src/server.ts.
 }
 
 export { app };
