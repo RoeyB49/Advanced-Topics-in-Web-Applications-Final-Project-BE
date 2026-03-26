@@ -32,7 +32,7 @@ export type AnimeQueryInsights = {
 const queryCache = new Map<string, CacheEntry>();
 let lastExternalRequestAt = 0;
 const chatCache = new Map<string, { response: ChatRecommendationResponse; createdAt: number }>();
-const lastChatExternalRequestAtByUser = new Map<string, number>();
+const lastChatExternalRequestAtByRequest = new Map<string, number>();
 
 export type ChatRole = "user" | "assistant";
 
@@ -54,6 +54,9 @@ export type ChatRecommendationResponse = {
   reply: string;
   recommendations: AnimeRecommendation[];
   extractedPreferences: string[];
+  debug?: {
+    fallbackReason?: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error";
+  };
   basedOn: {
     watchedCount: number;
     preferenceCount: number;
@@ -74,6 +77,16 @@ type AnimeCatalogEntry = {
   genres: string[];
   moods: string[];
   tags: string[];
+};
+
+type FallbackContext = {
+  combinedTerms: string[];
+  historyTerms: string[];
+  signalTerms: string[];
+};
+
+type RecommendationBuildContext = {
+  excludedTitles: Set<string>;
 };
 
 const normalizeQuery = (query: string): string => query.trim().toLowerCase();
@@ -202,6 +215,106 @@ const extractFallbackKeywords = (query: string): string[] => {
     .filter((word) => word.length > 1 && !stopWords.has(word));
 };
 
+const hashString = (value: string): number => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+};
+
+const TERM_SYNONYM_MAP: Record<string, string[]> = {
+  thriller: ["thriller", "suspense", "tense", "mind game", "psychological"],
+  mystery: ["mystery", "detective", "crime", "investigation"],
+  action: ["action", "fight", "battle", "war", "intense"],
+  drama: ["drama", "emotional", "character", "relationships"],
+  comedy: ["comedy", "funny", "light", "humor"],
+  sports: ["sports", "team", "competition", "tournament"],
+  romance: ["romance", "love", "romcom"],
+  fantasy: ["fantasy", "magic", "adventure", "journey"],
+  "sci-fi": ["sci-fi", "science fiction", "time travel", "future"],
+  dark: ["dark", "mature", "gritty", "serious"],
+};
+
+const extractSemanticTerms = (text: string): string[] => {
+  const normalized = normalizeQuery(text);
+  if (!normalized) {
+    return [];
+  }
+
+  const directTerms = extractFallbackKeywords(normalized);
+  const synonymMatches = Object.entries(TERM_SYNONYM_MAP)
+    .filter(([, synonyms]) => synonyms.some((synonym) => normalized.includes(synonym)))
+    .map(([canonicalTerm]) => canonicalTerm);
+
+  return normalizeList([...directTerms, ...synonymMatches]);
+};
+
+const escapeRegex = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const isRejectionStatementForTitle = (text: string, normalizedTitle: string): boolean => {
+  if (!text.includes(normalizedTitle)) {
+    return false;
+  }
+
+  const titleRegex = escapeRegex(normalizedTitle);
+  const exclusionHints = [
+    "don'?t want",
+    "do not want",
+    "remove",
+    "exclude",
+    "skip",
+    "avoid",
+    "not interested",
+    "already watched",
+    "watched",
+    "seen",
+    "beside",
+    "besides",
+    "except",
+    "anything but",
+    "other than",
+    "without",
+    "but not",
+    "no",
+  ].join("|");
+  const rejectionRegex = new RegExp(
+    `(?:${exclusionHints}).{0,45}${titleRegex}|${titleRegex}.{0,45}(?:${exclusionHints})`,
+    "i"
+  );
+
+  return rejectionRegex.test(text);
+};
+
+const extractRejectedAnimeTitles = (
+  message: string,
+  history: ChatMessageInput[]
+): string[] => {
+  const normalizedMessage = normalizeQuery(message || "");
+  const normalizedHistoryText = normalizeHistory(history, 40)
+    .map((entry) => entry.text)
+    .join(" ");
+  const fullText = `${normalizedMessage} ${normalizedHistoryText}`.trim();
+
+  if (!fullText) {
+    return [];
+  }
+
+  const catalogTitles = ANIME_RECOMMENDATION_CATALOG.map((entry) => entry.title.toLowerCase());
+  return catalogTitles.filter((normalizedTitle) =>
+    isRejectionStatementForTitle(fullText, normalizedTitle)
+  );
+};
+
+const sanitizeRecommendations = (
+  recommendations: AnimeRecommendation[],
+  excludedTitles: Set<string>
+): AnimeRecommendation[] => {
+  return recommendations.filter(
+    (recommendation) => !excludedTitles.has(recommendation.title.toLowerCase())
+  );
+};
+
 const detectTitles = (normalizedQuery: string): string[] => {
   return KNOWN_ANIME_TITLES.filter((title) => normalizedQuery.includes(title));
 };
@@ -294,6 +407,19 @@ const normalizeList = (items: string[] = []) => {
     .filter((value, index, array) => array.indexOf(value) === index);
 };
 
+const normalizeHistory = (
+  history: ChatMessageInput[] = [],
+  maxEntries = 20
+): ChatMessageInput[] => {
+  return history
+    .filter((entry) => entry && typeof entry.text === "string" && entry.text.trim().length > 0)
+    .slice(-Math.max(1, maxEntries))
+    .map((entry) => ({
+      role: entry.role === "assistant" ? "assistant" : "user",
+      text: entry.text.trim().toLowerCase(),
+    }));
+};
+
 const buildUserSignals = async (userId: string) => {
   const [authoredPosts, likedPosts, recentComments] = await Promise.all([
     Post.find({ author: userId }).sort({ createdAt: -1 }).limit(8).select("text").lean(),
@@ -319,8 +445,10 @@ const buildUserSignals = async (userId: string) => {
 
 const rankRecommendations = (
   combinedTerms: string[],
-  watchedSet: Set<string>
+  watchedSet: Set<string>,
+  seed: string
 ): AnimeRecommendation[] => {
+  const seedHash = hashString(seed);
   const scored = ANIME_RECOMMENDATION_CATALOG.map((entry) => {
     const matchCount = combinedTerms.reduce((score, term) => {
       const inGenres = entry.genres.some((genre) => genre.includes(term) || term.includes(genre));
@@ -330,17 +458,26 @@ const rankRecommendations = (
       return score + Number(inGenres || inTags || inMoods || inTitle);
     }, 0);
 
+    // Stable tie-breaker to avoid static top picks when scores are close/zero.
+    const tieBreaker = hashString(`${seedHash}:${entry.title}`) % 1000;
+
     return {
       entry,
       matchCount,
+      tieBreaker,
     };
   })
     .filter(({ entry }) => !watchedSet.has(entry.title.toLowerCase()))
-    .sort((a, b) => b.matchCount - a.matchCount);
+    .sort((a, b) => {
+      if (b.matchCount !== a.matchCount) {
+        return b.matchCount - a.matchCount;
+      }
+      return b.tieBreaker - a.tieBreaker;
+    });
 
   const selected = (scored[0]?.matchCount ?? 0) > 0
     ? scored.slice(0, 4)
-    : scored.slice(0, 3);
+    : scored.slice(0, 4);
 
   return selected.map(({ entry, matchCount }) => ({
     title: entry.title,
@@ -352,32 +489,61 @@ const rankRecommendations = (
 };
 
 const buildFallbackChatRecommendations = async (
-  payload: ChatRecommendationRequest
+  payload: ChatRecommendationRequest,
+  context: RecommendationBuildContext
 ): Promise<ChatRecommendationResponse> => {
   const normalizedMessage = normalizeQuery(payload.message);
+  const normalizedHistory = normalizeHistory(payload.history, 12);
   const watched = normalizeList(payload.watchedAnimes);
   const preferences = normalizeList(payload.preferences);
   const signals = await buildUserSignals(payload.userId);
 
-  const extractedFromMessage = extractFallbackKeywords(normalizedMessage);
+  const extractedFromMessage = extractSemanticTerms(normalizedMessage);
+  const historyTerms = extractSemanticTerms(normalizedHistory.map((entry) => entry.text).join(" "));
+  const signalTerms = extractSemanticTerms(signals.snippets.join(" "));
   const combinedTerms = normalizeList([
     ...extractedFromMessage,
+    ...historyTerms,
+    ...signalTerms,
     ...preferences,
     ...signals.inferredPreferences,
   ]);
 
-  const recommendations = rankRecommendations(combinedTerms, new Set(watched));
+  const fallbackContext: FallbackContext = {
+    combinedTerms,
+    historyTerms,
+    signalTerms,
+  };
+
+  const recommendations = rankRecommendations(
+    fallbackContext.combinedTerms,
+    context.excludedTitles,
+    `${payload.userId}:${normalizedMessage}:${normalizedHistory.map((entry) => entry.text).join("|")}`
+  );
   const topGenres = normalizeList(
     recommendations.flatMap((recommendation) => recommendation.genres)
   ).slice(0, 4);
+
+  const replyTemplates = [
+    `I matched your request to ${recommendations
+      .map((recommendation) => recommendation.title)
+      .join(", ")}. These lean into ${topGenres.join(", ")} vibes based on your recent activity.`,
+    `For your current mood, I would start with ${recommendations
+      .map((recommendation) => recommendation.title)
+      .join(", ")}. They line up with ${topGenres.join(", ")} and your chat context.`,
+    `I pulled ${recommendations
+      .map((recommendation) => recommendation.title)
+      .join(", ")} from your taste profile. The strongest overlap is ${topGenres.join(", ")} plus themes from your recent posts/comments.`,
+  ];
+  const replyTemplateIndex = hashString(
+    `${normalizedMessage}:${normalizedHistory.length}:${fallbackContext.signalTerms.join("|")}`
+  ) % replyTemplates.length;
 
   return {
     source: "fallback",
     reply:
       recommendations.length > 0
-        ? `Based on your watched list and preferences, I picked ${recommendations
-            .map((recommendation) => recommendation.title)
-            .join(", ")}. These match your ${topGenres.join(", ")} taste and the vibe from your recent reviews.`
+        ? replyTemplates[replyTemplateIndex]
         : "I need a bit more detail about your favorite genres or anime to recommend confidently.",
     recommendations,
     extractedPreferences: normalizeList([...preferences, ...signals.inferredPreferences]),
@@ -389,12 +555,23 @@ const buildFallbackChatRecommendations = async (
   };
 };
 
+const withFallbackReason = (
+  response: ChatRecommendationResponse,
+  reason: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error"
+): ChatRecommendationResponse => ({
+  ...response,
+  debug: {
+    fallbackReason: reason,
+  },
+});
+
 const buildGeminiChatPrompt = (payload: {
   message: string;
   watchedAnimes: string[];
   preferences: string[];
   userSignals: string[];
   history: ChatMessageInput[];
+  excludedTitles: string[];
 }) => {
   const historyText = payload.history
     .slice(-6)
@@ -421,10 +598,12 @@ const buildGeminiChatPrompt = (payload: {
     "Rules:",
     "- Recommend 3-5 anime.",
     "- Avoid watched anime in recommendations.",
+    "- Never recommend anime from the excluded list.",
     "- Confidence must be 1-100.",
     "- Keep titles as canonical names.",
     `User message: ${payload.message}`,
     `Watched anime: ${payload.watchedAnimes.join(", ") || "none"}`,
+    `Excluded anime (must not appear): ${payload.excludedTitles.join(", ") || "none"}`,
     `Stated preferences: ${payload.preferences.join(", ") || "none"}`,
     `User in-app signals: ${payload.userSignals.join(" || ") || "none"}`,
     `Recent chat history:\n${historyText || "none"}`,
@@ -433,7 +612,8 @@ const buildGeminiChatPrompt = (payload: {
 
 const parseGeminiChatResponse = (
   textResponse: string,
-  fallback: ChatRecommendationResponse
+  fallback: ChatRecommendationResponse,
+  excludedTitles: Set<string>
 ): ChatRecommendationResponse => {
   const parsed = JSON.parse(extractJsonFromText(textResponse));
 
@@ -452,6 +632,9 @@ const parseGeminiChatResponse = (
         .slice(0, 5)
     : [];
 
+  const safeGeminiRecommendations = sanitizeRecommendations(recommendations, excludedTitles);
+  const safeFallbackRecommendations = sanitizeRecommendations(fallback.recommendations, excludedTitles);
+
   const extractedPreferences = Array.isArray(parsed?.extractedPreferences)
     ? normalizeList(parsed.extractedPreferences.map((item: unknown) => String(item)))
     : fallback.extractedPreferences;
@@ -459,7 +642,10 @@ const parseGeminiChatResponse = (
   return {
     source: "gemini",
     reply: String(parsed?.reply || fallback.reply),
-    recommendations: recommendations.length > 0 ? recommendations : fallback.recommendations,
+    recommendations:
+      safeGeminiRecommendations.length > 0
+        ? safeGeminiRecommendations
+        : safeFallbackRecommendations,
     extractedPreferences,
     basedOn: fallback.basedOn,
   };
@@ -468,7 +654,8 @@ const parseGeminiChatResponse = (
 const analyzeChatWithGemini = async (
   payload: ChatRecommendationRequest,
   userSignals: string[],
-  fallback: ChatRecommendationResponse
+  fallback: ChatRecommendationResponse,
+  excludedTitles: Set<string>
 ): Promise<ChatRecommendationResponse> => {
   const geminiApiKey = process.env.GEMINI_API_KEY;
   const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
@@ -485,6 +672,7 @@ const analyzeChatWithGemini = async (
     preferences: normalizeList(payload.preferences),
     userSignals,
     history: (payload.history || []).filter((entry) => entry && entry.text).slice(-8),
+    excludedTitles: Array.from(excludedTitles),
   });
 
   const response = await axios.post(
@@ -514,7 +702,7 @@ const analyzeChatWithGemini = async (
     throw new Error("Gemini returned empty response for chat recommendations");
   }
 
-  return parseGeminiChatResponse(textResponse, fallback);
+  return parseGeminiChatResponse(textResponse, fallback, excludedTitles);
 };
 
 const parseGeminiInsights = (
@@ -726,11 +914,16 @@ export const getAnimeRecommendationChat = async (
 
   const watched = normalizeList(payload.watchedAnimes);
   const preferences = normalizeList(payload.preferences);
+  const history = normalizeHistory(payload.history, 20);
+  const rejectedTitles = extractRejectedAnimeTitles(payload.message, payload.history || []);
+  const excludedTitles = new Set([...watched, ...rejectedTitles]);
   const cacheKey = JSON.stringify({
     userId: payload.userId,
     message: normalizedMessage,
     watched,
     preferences,
+    history,
+    rejectedTitles,
   });
 
   const cached = chatCache.get(cacheKey);
@@ -739,25 +932,39 @@ export const getAnimeRecommendationChat = async (
   }
 
   const signals = await buildUserSignals(payload.userId);
-  const fallback = await buildFallbackChatRecommendations(payload);
+  const fallback = await buildFallbackChatRecommendations(payload, { excludedTitles });
 
   const now = Date.now();
-  const lastForUser = lastChatExternalRequestAtByUser.get(payload.userId) || 0;
+  const lastForRequest = lastChatExternalRequestAtByRequest.get(cacheKey) || 0;
+  const externalEnabled = process.env.AI_EXTERNAL_ENABLED === "true";
+  const hasGeminiApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const isRateLimited = now - lastForRequest < AI_CHAT_MIN_INTERVAL_MS;
   const shouldCallExternal =
-    process.env.AI_EXTERNAL_ENABLED === "true" &&
-    now - lastForUser >= AI_CHAT_MIN_INTERVAL_MS;
+    externalEnabled &&
+    hasGeminiApiKey &&
+    !isRateLimited;
 
   try {
     if (shouldCallExternal) {
-      lastChatExternalRequestAtByUser.set(payload.userId, now);
-      const result = await analyzeChatWithGemini(payload, signals.snippets, fallback);
+      lastChatExternalRequestAtByRequest.set(cacheKey, now);
+      const result = await analyzeChatWithGemini(payload, signals.snippets, fallback, excludedTitles);
       chatCache.set(cacheKey, { response: result, createdAt: Date.now() });
       return result;
     }
   } catch (error) {
     console.error("Error contacting Gemini for recommendation chat:", error);
+    const fallbackWithReason = withFallbackReason(fallback, "gemini-error");
+    chatCache.set(cacheKey, { response: fallbackWithReason, createdAt: Date.now() });
+    return fallbackWithReason;
   }
 
-  chatCache.set(cacheKey, { response: fallback, createdAt: Date.now() });
-  return fallback;
+  const fallbackReason = !externalEnabled
+    ? "external-disabled"
+    : !hasGeminiApiKey
+      ? "missing-api-key"
+      : "chat-rate-limited";
+
+  const fallbackWithReason = withFallbackReason(fallback, fallbackReason);
+  chatCache.set(cacheKey, { response: fallbackWithReason, createdAt: Date.now() });
+  return fallbackWithReason;
 };
