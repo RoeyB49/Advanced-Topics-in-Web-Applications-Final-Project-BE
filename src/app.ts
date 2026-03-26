@@ -3,6 +3,7 @@ import express, { Express } from "express";
 import cors from "cors";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
+import fs from "fs";
 import postRoutes from "./routes/post.routes";
 import commentRoutes from "./routes/comment.routes";
 import authRoutes from "./routes/auth.routes";
@@ -15,10 +16,17 @@ dotenv.config();
 
 const app: Express = express();
 
+const defaultOrigins = ["http://localhost:5173", "http://127.0.0.1:5173"];
+const configuredOrigins = (process.env.FRONTEND_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = configuredOrigins.length > 0 ? configuredOrigins : defaultOrigins;
+
 // Middleware
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    origin: allowedOrigins,
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
   })
@@ -67,12 +75,25 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/ai", aiRoutes);
 
+const publicDir = path.resolve(__dirname, "../public");
+const publicIndexPath = path.join(publicDir, "index.html");
+const hasFrontendBuild = fs.existsSync(publicIndexPath);
+
+if (hasFrontendBuild) {
+  app.use(express.static(publicDir));
+
+  app.get(/^\/(?!api(?:\/|$)|api-docs(?:\/|$)|uploads(?:\/|$)).*/, (req, res) => {
+    res.sendFile(publicIndexPath);
+  });
+}
+
 // Health check endpoint
-app.get("/", (req, res) => {
+app.get("/api/health", (req, res) => {
   res.json({
     message: "Advanced Topics in Web Applications - API is running",
     version: "1.0.0",
     documentation: `/api-docs`,
+    frontendServed: hasFrontendBuild,
   });
 });
 
