@@ -227,6 +227,70 @@ describe("AI Endpoints", () => {
     ).toBe(true);
   });
 
+  it("should enforce sports-only recommendations when user asks for just sports", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "just sports please",
+        watchedAnimes: ["Attack on Titan"],
+        preferences: ["sports"],
+        history: [
+          { role: "assistant", text: "Do you prefer intense games or team growth arcs?" },
+          { role: "user", text: "I want something funny" },
+          { role: "assistant", text: "Try Mob Psycho 100 II and Blue Lock." },
+          { role: "user", text: "Maybe blue lock?" },
+          { role: "assistant", text: "Blue Lock is a great fit." },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("source", "fallback");
+    expect(Array.isArray(res.body.recommendations)).toBe(true);
+    expect(res.body.recommendations.length).toBeGreaterThan(0);
+
+    const allSports = res.body.recommendations.every((item: { genres: string[] }) =>
+      Array.isArray(item.genres) && item.genres.includes("sports")
+    );
+    expect(allSports).toBe(true);
+    expect(String(res.body.reply).toLowerCase()).toContain("sports");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("action");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("thriller");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("mecha");
+  });
+
+  it("should exclude sports recommendations when user says they do not want sports", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "dude I don't want sports",
+        watchedAnimes: ["Attack on Titan"],
+        preferences: ["sports", "drama"],
+        history: [
+          {
+            role: "assistant",
+            text: "I pulled Blue Lock and Haikyuu!! from your taste profile.",
+          },
+          {
+            role: "user",
+            text: "please not sports",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("source", "fallback");
+    expect(Array.isArray(res.body.recommendations)).toBe(true);
+    expect(res.body.recommendations.length).toBeGreaterThan(0);
+
+    const hasAnySports = res.body.recommendations.some((item: { genres: string[] }) =>
+      Array.isArray(item.genres) && item.genres.includes("sports")
+    );
+    expect(hasAnySports).toBe(false);
+    expect(String(res.body.reply).toLowerCase()).not.toContain("sports");
+  });
+
   it("should return gemini recommendations when external AI is enabled", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
     process.env.GEMINI_API_KEY = "test-gemini-key";
