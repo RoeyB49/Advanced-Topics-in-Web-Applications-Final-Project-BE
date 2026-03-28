@@ -29,6 +29,10 @@ const AI_METRICS_ROLLING_WINDOW_MS = parseInt(
   process.env.AI_METRICS_ROLLING_WINDOW_MS || "900000",
   10
 );
+const AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS = parseInt(
+  process.env.AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS || "3",
+  10
+);
 
 type CacheEntry = {
   insights: AnimeQueryInsights;
@@ -135,6 +139,11 @@ type ChatMetricEvent = {
   fallbackReason?: FallbackReason;
   hasRecommendations: boolean;
   repeatedRecommendation: boolean;
+};
+
+type RecommendationRound = {
+  titles: string[];
+  createdAt: number;
 };
 
 type ChatRecommendationRequest = {
@@ -338,7 +347,7 @@ const aiAdvisorMetrics: AiAdvisorMetrics = {
   repeatedRecommendationResponses: 0,
 };
 
-const recommendationHistoryByUser = new Map<string, { titles: string[]; createdAt: number }>();
+const recommendationHistoryByUser = new Map<string, RecommendationRound[]>();
 const chatMetricEvents: ChatMetricEvent[] = [];
 
 const emptyFallbackReasonCounters = (): Record<FallbackReason, number> => ({
@@ -405,11 +414,25 @@ const getRollingWindowMetrics = () => {
 
 const pruneOldRecommendationHistory = () => {
   const now = Date.now();
-  Array.from(recommendationHistoryByUser.entries()).forEach(([userId, history]) => {
-    if (now - history.createdAt > AI_METRICS_HISTORY_TTL_MS) {
+  Array.from(recommendationHistoryByUser.entries()).forEach(([userId, rounds]) => {
+    const freshRounds = rounds.filter((round) => now - round.createdAt <= AI_METRICS_HISTORY_TTL_MS);
+    if (freshRounds.length === 0) {
       recommendationHistoryByUser.delete(userId);
+      return;
     }
+    recommendationHistoryByUser.set(userId, freshRounds);
   });
+};
+
+const getRecentRecommendationTitlesForUser = (userId: string, roundsToInclude = 1): string[] => {
+  pruneOldRecommendationHistory();
+
+  const rounds = recommendationHistoryByUser.get(userId) || [];
+  return Array.from(new Set(
+    rounds
+      .slice(-Math.max(1, roundsToInclude))
+      .flatMap((round) => round.titles)
+  ));
 };
 
 const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationResponse) => {
@@ -432,7 +455,8 @@ const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationRe
 
   pruneOldRecommendationHistory();
 
-  const previous = recommendationHistoryByUser.get(userId);
+  const previousRounds = recommendationHistoryByUser.get(userId) || [];
+  const previous = previousRounds[previousRounds.length - 1];
   let repeatedRecommendation = false;
   if (previous && previous.titles.length > 0 && currentTitles.length > 0) {
     const overlapCount = currentTitles.filter((title) => previous.titles.includes(title)).length;
@@ -452,10 +476,13 @@ const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationRe
     repeatedRecommendation,
   });
 
-  recommendationHistoryByUser.set(userId, {
+  const nextRounds = [...previousRounds, {
     titles: currentTitles,
     createdAt: Date.now(),
-  });
+  }]
+    .slice(-Math.max(AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS + 2, 6));
+
+  recommendationHistoryByUser.set(userId, nextRounds);
 };
 
 export const getAiAdvisorMetrics = () => {
@@ -866,10 +893,29 @@ const buildFallbackChatRecommendations = async (
   const signals = await buildUserSignals(payload.userId);
 
   const extractedFromMessage = extractSemanticTerms(normalizedMessage);
+  const messageDetectedTitles = detectTitles(normalizedMessage);
+  const titleDrivenTerms = normalizeList(
+    messageDetectedTitles.flatMap((detectedTitle) => {
+      const catalogMatch = animeRecommendationCatalog.find(
+        (entry) => entry.title.toLowerCase() === detectedTitle
+      );
+
+      if (!catalogMatch) {
+        return [];
+      }
+
+      return [
+        ...catalogMatch.genres,
+        ...catalogMatch.moods,
+        ...catalogMatch.tags,
+      ];
+    })
+  );
   const historyTerms = extractSemanticTerms(normalizedHistory.map((entry) => entry.text).join(" "));
   const signalTerms = extractSemanticTerms(signals.snippets.join(" "));
   const combinedTerms = normalizeList([
     ...extractedFromMessage,
+    ...titleDrivenTerms,
     ...historyTerms,
     ...signalTerms,
     ...preferences,
@@ -1286,6 +1332,7 @@ export const searchPostsWithInsights = async (query: string) => {
 export const getAnimeRecommendationChat = async (
   payload: ChatRecommendationRequest
 ): Promise<ChatRecommendationResponse> => {
+  maybeReloadCatalog();
   const normalizedMessage = normalizeQuery(payload.message || "");
   if (!normalizedMessage) {
     throw new Error("message is required");
@@ -1297,10 +1344,14 @@ export const getAnimeRecommendationChat = async (
   const rejectedTitles = extractRejectedAnimeTitles(payload.message, payload.history || []);
   const wantsAlternatives = userAskedForAlternatives(normalizedMessage, history);
   const assistantMentionedTitles = extractAssistantMentionedTitles(history);
+  const recentRecommendedTitles = wantsAlternatives
+    ? getRecentRecommendationTitlesForUser(payload.userId, AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS)
+    : [];
   const excludedTitles = new Set([
     ...watched,
     ...rejectedTitles,
     ...(wantsAlternatives ? Array.from(assistantMentionedTitles) : []),
+    ...recentRecommendedTitles,
   ]);
   const historyFingerprint = history
     .slice(-8)

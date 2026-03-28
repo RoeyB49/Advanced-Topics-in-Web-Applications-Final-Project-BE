@@ -134,6 +134,163 @@ describe("AI Endpoints", () => {
     expect(titles).not.toContain("Steins;Gate");
   });
 
+  it("should provide different recommendations for 'something else' even without chat history", async () => {
+    const firstRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend mystery thriller anime",
+        watchedAnimes: [],
+        preferences: ["mystery", "thriller", "seinen", "sci-fi"],
+      });
+
+    const secondRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["mystery", "thriller", "seinen", "sci-fi"],
+      });
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+
+    const firstTitles = firstRes.body.recommendations.map((item: { title: string }) => item.title);
+    const secondTitles = secondRes.body.recommendations.map((item: { title: string }) => item.title);
+
+    expect(firstTitles.length).toBeGreaterThan(0);
+    expect(secondTitles.length).toBeGreaterThan(0);
+    expect(secondTitles).not.toEqual(firstTitles);
+    expect(secondTitles.some((title: string) => firstTitles.includes(title))).toBe(false);
+  });
+
+  it("should enforce low overlap across repeated 'something else' rounds", async () => {
+    const firstRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "recommend action and adventure anime",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    const secondRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    const thirdRes = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "something else",
+        watchedAnimes: [],
+        preferences: ["action", "adventure", "fantasy"],
+      });
+
+    expect(firstRes.status).toBe(200);
+    expect(secondRes.status).toBe(200);
+    expect(thirdRes.status).toBe(200);
+
+    const firstTitles = firstRes.body.recommendations.map((item: { title: string }) => item.title);
+    const secondTitles = secondRes.body.recommendations.map((item: { title: string }) => item.title);
+    const thirdTitles = thirdRes.body.recommendations.map((item: { title: string }) => item.title);
+
+    const firstAndSecond = new Set([...firstTitles, ...secondTitles]);
+    const overlapWithPreviousRounds = thirdTitles.filter((title: string) => firstAndSecond.has(title));
+
+    expect(overlapWithPreviousRounds.length).toBeLessThanOrEqual(1);
+  });
+
+  it("should treat explicit title requests like Blue Lock as sports intent", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "maybe something like blue lock?",
+        watchedAnimes: [],
+        preferences: [],
+      });
+
+    expect(res.status).toBe(200);
+    const titles = res.body.recommendations.map((item: { title: string }) => item.title);
+
+    expect(
+      titles.includes("Blue Lock") ||
+      titles.includes("Haikyuu!!") ||
+      titles.includes("Kuroko's Basketball")
+    ).toBe(true);
+  });
+
+  it("should enforce sports-only recommendations when user asks for just sports", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "just sports please",
+        watchedAnimes: ["Attack on Titan"],
+        preferences: ["sports"],
+        history: [
+          { role: "assistant", text: "Do you prefer intense games or team growth arcs?" },
+          { role: "user", text: "I want something funny" },
+          { role: "assistant", text: "Try Mob Psycho 100 II and Blue Lock." },
+          { role: "user", text: "Maybe blue lock?" },
+          { role: "assistant", text: "Blue Lock is a great fit." },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("source", "fallback");
+    expect(Array.isArray(res.body.recommendations)).toBe(true);
+    expect(res.body.recommendations.length).toBeGreaterThan(0);
+
+    const allSports = res.body.recommendations.every((item: { genres: string[] }) =>
+      Array.isArray(item.genres) && item.genres.includes("sports")
+    );
+    expect(allSports).toBe(true);
+    expect(String(res.body.reply).toLowerCase()).toContain("sports");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("action");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("thriller");
+    expect(String(res.body.reply).toLowerCase()).not.toContain("mecha");
+  });
+
+  it("should exclude sports recommendations when user says they do not want sports", async () => {
+    const res = await request(app)
+      .post("/api/ai/recommendations/chat")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        message: "dude I don't want sports",
+        watchedAnimes: ["Attack on Titan"],
+        preferences: ["sports", "drama"],
+        history: [
+          {
+            role: "assistant",
+            text: "I pulled Blue Lock and Haikyuu!! from your taste profile.",
+          },
+          {
+            role: "user",
+            text: "please not sports",
+          },
+        ],
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("source", "fallback");
+    expect(Array.isArray(res.body.recommendations)).toBe(true);
+    expect(res.body.recommendations.length).toBeGreaterThan(0);
+
+    const hasAnySports = res.body.recommendations.some((item: { genres: string[] }) =>
+      Array.isArray(item.genres) && item.genres.includes("sports")
+    );
+    expect(hasAnySports).toBe(false);
+    expect(String(res.body.reply).toLowerCase()).not.toContain("sports");
+  });
+
   it("should return gemini recommendations when external AI is enabled", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
     process.env.GEMINI_API_KEY = "test-gemini-key";
