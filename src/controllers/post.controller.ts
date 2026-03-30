@@ -5,6 +5,81 @@ import { searchPosts as searchPostsWithAI } from "../services/ai.service";
 import { searchPostsWithInsights } from "../services/ai.service";
 import Comment from "../models/comment.model";
 
+const readRawTagsFromBody = (body: Record<string, unknown>): unknown => {
+  if (Object.prototype.hasOwnProperty.call(body, "tags")) {
+    return body.tags;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(body, "tags[]")) {
+    return body["tags[]"];
+  }
+
+  return undefined;
+};
+
+const extractTagTokens = (value: unknown): string[] => {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap(extractTagTokens);
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return [];
+  }
+
+  if (raw.startsWith("[") && raw.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.flatMap(extractTagTokens);
+      }
+    } catch {
+      // Fall back to comma-separated parsing when not valid JSON.
+    }
+  }
+
+  return raw.split(",");
+};
+
+const normalizeTagsInput = (rawTags: unknown): string[] => {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const token of extractTagTokens(rawTags)) {
+    const tag = String(token).trim().toLowerCase();
+    if (!tag || seen.has(tag)) {
+      continue;
+    }
+
+    seen.add(tag);
+    normalized.push(tag);
+  }
+
+  return normalized;
+};
+
+const normalizeTagsOutput = (rawTags: unknown): string[] => {
+  if (!Array.isArray(rawTags)) {
+    return [];
+  }
+
+  return rawTags
+    .map((tag) => String(tag).trim())
+    .filter((tag) => tag.length > 0);
+};
+
+const toPostResponse = (post: any) => {
+  const base = post?.toObject ? post.toObject() : post;
+  return {
+    ...base,
+    tags: normalizeTagsOutput(base?.tags),
+  };
+};
+
 /**
  * @swagger
  * /api/posts:
@@ -54,7 +129,7 @@ export const getAllPosts = async (req: Request, res: Response): Promise<void> =>
       posts.map(async (post) => {
         const commentsCount = await Comment.countDocuments({ post: post._id });
         return {
-          ...post.toObject(),
+          ...toPostResponse(post),
           commentsCount,
           likesCount: post.likes.length
         };
@@ -93,7 +168,7 @@ export const getMyPosts = async (
       posts.map(async (post) => {
         const commentsCount = await Comment.countDocuments({ post: post._id });
         return {
-          ...post.toObject(),
+          ...toPostResponse(post),
           commentsCount,
           likesCount: post.likes.length
         };
@@ -140,6 +215,7 @@ export const createPost = async (
 ): Promise<void> => {
   try {
     const { text } = req.body;
+    const tags = normalizeTagsInput(readRawTagsFromBody(req.body as Record<string, unknown>));
     const author = req.user?._id;
 
     if (!author) {
@@ -147,7 +223,7 @@ export const createPost = async (
       return;
     }
 
-    const postData: any = { text, author };
+    const postData: any = { text, author, tags };
     if (req.file) {
       postData.imageUrl = `/uploads/posts/${req.file.filename}`;
     }
@@ -155,7 +231,7 @@ export const createPost = async (
     const post = new Post(postData);
     await post.save();
 
-    res.status(201).json(post);
+    res.status(201).json(toPostResponse(post));
   } catch (error: any) {
     res.status(400).json({ message: error.message });
   }
@@ -194,7 +270,7 @@ export const getPostById = async (
       res.status(404).json({ message: "Post not found" });
       return;
     }
-    res.status(200).json(post);
+    res.status(200).json(toPostResponse(post));
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
@@ -244,6 +320,9 @@ export const updatePost = async (
 ): Promise<void> => {
   try {
     const { text } = req.body;
+    const hasTagsInPayload =
+      Object.prototype.hasOwnProperty.call(req.body, "tags") ||
+      Object.prototype.hasOwnProperty.call(req.body, "tags[]");
     const post = await Post.findById(req.params.id);
 
     if (!post) {
@@ -257,12 +336,15 @@ export const updatePost = async (
     }
 
     post.text = text || post.text;
+    if (hasTagsInPayload) {
+      post.tags = normalizeTagsInput(readRawTagsFromBody(req.body as Record<string, unknown>));
+    }
     if (req.file) {
       post.imageUrl = `/uploads/posts/${req.file.filename}`;
     }
 
     const updatedPost = await post.save();
-    res.status(200).json(updatedPost);
+    res.status(200).json(toPostResponse(updatedPost));
   } catch (error: any) {
     res.status(400).json({ message: error.message });
   }
@@ -365,7 +447,7 @@ export const likePost = async (
     }
 
     await post.save();
-    res.status(200).json(post);
+    res.status(200).json(toPostResponse(post));
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
@@ -398,7 +480,7 @@ export const searchPosts = async (req: Request, res: Response): Promise<void> =>
       return;
     }
     const posts = await searchPostsWithAI(query);
-    res.status(200).json(posts);
+    res.status(200).json(posts.map((post: any) => toPostResponse(post)));
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
@@ -437,7 +519,10 @@ export const intelligentSearchPosts = async (
     }
 
     const result = await searchPostsWithInsights(query);
-    res.status(200).json(result);
+    res.status(200).json({
+      ...result,
+      posts: result.posts.map((post: any) => toPostResponse(post)),
+    });
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }

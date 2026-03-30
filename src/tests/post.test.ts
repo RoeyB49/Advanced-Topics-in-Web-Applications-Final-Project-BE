@@ -36,7 +36,7 @@ describe("Post Endpoints", () => {
     await request(app)
       .post("/api/posts")
       .set("Authorization", `Bearer ${accessToken}`)
-      .send({ text: "Post A" });
+      .send({ text: "Post A", tags: ["Action", "Shonen"] });
 
     const res = await request(app).get("/api/posts?page=1&limit=10");
 
@@ -46,6 +46,23 @@ describe("Post Endpoints", () => {
     expect(res.body).toHaveProperty("currentPage");
     expect(Array.isArray(res.body.posts)).toBe(true);
     expect(res.body.posts[0]).toHaveProperty("commentsCount");
+    expect(res.body.posts[0]).toHaveProperty("tags");
+    expect(Array.isArray(res.body.posts[0].tags)).toBe(true);
+    expect(res.body.posts[0].tags).toEqual(expect.arrayContaining(["action", "shonen"]));
+  });
+
+  it("should create a post with multipart tags and normalize them", async () => {
+    const res = await request(app)
+      .post("/api/posts")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .field("text", "Tagged post")
+      .field("tags", "Action")
+      .field("tags", "Shonen")
+      .field("tags", " ");
+
+    expect(res.status).toBe(201);
+    expect(res.body).toHaveProperty("tags");
+    expect(res.body.tags).toEqual(["action", "shonen"]);
   });
 
   it("should get my posts", async () => {
@@ -74,10 +91,14 @@ describe("Post Endpoints", () => {
     const res = await request(app)
       .put(`/api/posts/${postId}`)
       .set("Authorization", `Bearer ${accessToken}`)
-      .send({ text: "After" });
+      .field("text", "After")
+      .field("tags", "Drama")
+      .field("tags", "Psychological");
 
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty("text", "After");
+    expect(res.body).toHaveProperty("tags");
+    expect(res.body.tags).toEqual(["drama", "psychological"]);
   });
 
   it("should like and unlike a post", async () => {
