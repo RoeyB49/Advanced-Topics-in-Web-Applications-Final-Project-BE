@@ -1,9 +1,18 @@
-import axios from "axios";
 import fs from "fs";
 import path from "path";
 import Post from "../models/post.model";
 import Comment from "../models/comment.model";
 import animeCatalogSeed from "../data/anime-catalog.json";
+import {
+  generateGeminiResponseText,
+  parseGeminiJsonObject,
+} from "./ai/geminiClient.helper";
+import {
+  clearReplyDiversityHistory,
+  finalizeChatResponse,
+  shouldCacheChatResponse,
+} from "./ai/replyDiversity.helper";
+import { getCommunitySignalSummary } from "./ai/communitySignals.helper";
 
 const AI_MIN_INTERVAL_MS = parseInt(process.env.AI_MIN_INTERVAL_MS || "1500", 10);
 const AI_CACHE_TTL_MS = parseInt(process.env.AI_CACHE_TTL_MS || "300000", 10);
@@ -33,6 +42,23 @@ const AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS = parseInt(
   process.env.AI_CHAT_ALTERNATIVE_EXCLUDE_ROUNDS || "3",
   10
 );
+const AI_CHAT_REPLY_HISTORY_TTL_MS = parseInt(
+  process.env.AI_CHAT_REPLY_HISTORY_TTL_MS || "1200000",
+  10
+);
+const AI_CHAT_REPLY_HISTORY_MAX_ITEMS = parseInt(
+  process.env.AI_CHAT_REPLY_HISTORY_MAX_ITEMS || "8",
+  10
+);
+const AI_COMMUNITY_SIGNAL_TTL_MS = parseInt(
+  process.env.AI_COMMUNITY_SIGNAL_TTL_MS || "300000",
+  10
+);
+const AI_CHAT_GEMINI_TEMPERATURE = parseFloat(
+  process.env.AI_CHAT_GEMINI_TEMPERATURE || "0.7"
+);
+const AI_CHAT_DISABLE_CACHE_WHEN_EXTERNAL =
+  process.env.AI_CHAT_DISABLE_CACHE_WHEN_EXTERNAL !== "false";
 
 type CacheEntry = {
   insights: AnimeQueryInsights;
@@ -519,6 +545,7 @@ export const resetAiAdvisorMetrics = () => {
 
   recommendationHistoryByUser.clear();
   chatMetricEvents.length = 0;
+  clearReplyDiversityHistory();
 
   return getAiAdvisorMetrics();
 };
@@ -592,6 +619,9 @@ const isRejectionStatementForTitle = (text: string, normalizedTitle: string): bo
   const exclusionHints = [
     "don'?t want",
     "do not want",
+    "not these",
+    "not this",
+    "not that",
     "remove",
     "exclude",
     "skip",
@@ -617,6 +647,34 @@ const isRejectionStatementForTitle = (text: string, normalizedTitle: string): bo
   return rejectionRegex.test(text);
 };
 
+const extractExplicitExcludedTitleCandidates = (message: string): string[] => {
+  const normalizedMessage = normalizeQuery(message || "");
+  if (!normalizedMessage) {
+    return [];
+  }
+
+  const listPattern = /(?:not\s+these|not\s+this|not\s+that|exclude|without|except|remove)\s*:?(.*)$/i;
+  const match = normalizedMessage.match(listPattern);
+  if (!match || !match[1]) {
+    return [];
+  }
+
+  const tail = match[1]
+    .replace(/\b(just|only|please|pls)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!tail) {
+    return [];
+  }
+
+  return tail
+    .split(/,|\/|;|\band\b/)
+    .map((part) => part.trim())
+    .map((part) => part.replace(/^[:\-]+/, "").trim())
+    .filter((part) => part.length >= 3);
+};
+
 const extractRejectedAnimeTitles = (
   message: string,
   history: ChatMessageInput[]
@@ -633,9 +691,18 @@ const extractRejectedAnimeTitles = (
 
   maybeReloadCatalog();
   const catalogTitles = catalogKnownTitles;
-  return catalogTitles.filter((normalizedTitle) =>
+  const explicitCandidates = extractExplicitExcludedTitleCandidates(message);
+  const explicitMatchedTitles = explicitCandidates.flatMap((candidate) => {
+    return catalogTitles.filter((title) => {
+      return title.includes(candidate) || candidate.includes(title);
+    });
+  });
+
+  const rejectionMatchedTitles = catalogTitles.filter((normalizedTitle) =>
     isRejectionStatementForTitle(fullText, normalizedTitle)
   );
+
+  return normalizeList([...explicitMatchedTitles, ...rejectionMatchedTitles]);
 };
 
 const sanitizeRecommendations = (
@@ -665,6 +732,19 @@ const sanitizeRecommendations = (
     .slice(0, 5);
 };
 
+const filterRecommendationsByStrictGenres = (
+  recommendations: AnimeRecommendation[],
+  strictGenres: string[]
+): AnimeRecommendation[] => {
+  if (strictGenres.length === 0) {
+    return recommendations;
+  }
+
+  return recommendations.filter((recommendation) => {
+    return strictGenres.every((genre) => recommendation.genres.includes(genre));
+  });
+};
+
 const detectTitles = (normalizedQuery: string): string[] => {
   maybeReloadCatalog();
   const knownTitles = normalizeList([...KNOWN_ANIME_TITLES, ...catalogKnownTitles]);
@@ -675,6 +755,29 @@ const detectGenres = (normalizedQuery: string): string[] => {
   maybeReloadCatalog();
   const knownGenres = normalizeList([...KNOWN_GENRES, ...catalogKnownGenres]);
   return knownGenres.filter((genre) => normalizedQuery.includes(genre));
+};
+
+const extractStrictGenreConstraints = (
+  message: string,
+  history: ChatMessageInput[] = []
+): string[] => {
+  const combinedText = normalizeQuery([
+    message,
+    ...history.slice(-4).map((entry) => entry.text),
+  ].join(" "));
+
+  if (!combinedText) {
+    return [];
+  }
+
+  maybeReloadCatalog();
+  const knownGenres = normalizeList([...KNOWN_GENRES, ...catalogKnownGenres]);
+  return knownGenres.filter((genre) => {
+    const genreRegex = escapeRegex(genre);
+    const strictBefore = new RegExp(`\\b(?:just|only|strictly)\\s+${genreRegex}\\b`, "i");
+    const strictAfter = new RegExp(`\\b${genreRegex}\\s+only\\b`, "i");
+    return strictBefore.test(combinedText) || strictAfter.test(combinedText);
+  });
 };
 
 const userAskedForAlternatives = (message: string, history: ChatMessageInput[]): boolean => {
@@ -758,17 +861,6 @@ const buildGeminiPrompt = (normalizedQuery: string) => {
     "- If uncertain, return empty arrays and neutral/general-search.",
     `Query: ${normalizedQuery}`,
   ].join("\n");
-};
-
-const extractJsonFromText = (text: string): string => {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-
-  if (start === -1 || end === -1 || end <= start) {
-    throw new Error("Gemini response does not contain a JSON object");
-  }
-
-  return text.slice(start, end + 1);
 };
 
 const normalizeList = (items: string[] = []) => {
@@ -891,6 +983,12 @@ const buildFallbackChatRecommendations = async (
   const watched = normalizeList(payload.watchedAnimes);
   const preferences = normalizeList(payload.preferences);
   const signals = await buildUserSignals(payload.userId);
+  const communitySignals = await getCommunitySignalSummary({
+    ttlMs: AI_COMMUNITY_SIGNAL_TTL_MS,
+    maybeReloadCatalog,
+    detectGenres,
+    detectTitles,
+  });
 
   const extractedFromMessage = extractSemanticTerms(normalizedMessage);
   const messageDetectedTitles = detectTitles(normalizedMessage);
@@ -913,11 +1011,17 @@ const buildFallbackChatRecommendations = async (
   );
   const historyTerms = extractSemanticTerms(normalizedHistory.map((entry) => entry.text).join(" "));
   const signalTerms = extractSemanticTerms(signals.snippets.join(" "));
+  const communityTerms = normalizeList([
+    ...communitySignals.topGenres,
+    ...communitySignals.topTitles,
+    ...extractSemanticTerms(communitySignals.sampleSnippets.join(" ")),
+  ]);
   const combinedTerms = normalizeList([
     ...extractedFromMessage,
     ...titleDrivenTerms,
     ...historyTerms,
     ...signalTerms,
+    ...communityTerms,
     ...preferences,
     ...signals.inferredPreferences,
   ]);
@@ -928,11 +1032,20 @@ const buildFallbackChatRecommendations = async (
     signalTerms,
   };
 
-  const recommendations = rankRecommendations(
+  const strictGenres = extractStrictGenreConstraints(payload.message, normalizedHistory);
+
+  let recommendations = rankRecommendations(
     fallbackContext.combinedTerms,
     context.excludedTitles,
     context.responseVariantSeed
   );
+
+  if (strictGenres.length > 0) {
+    recommendations = recommendations.filter((recommendation) => {
+      return strictGenres.every((genre) => recommendation.genres.includes(genre));
+    });
+  }
+
   const topGenres = normalizeList(
     recommendations.flatMap((recommendation) => recommendation.genres)
   ).slice(0, 4);
@@ -956,7 +1069,11 @@ const buildFallbackChatRecommendations = async (
     source: "fallback",
     reply:
       recommendations.length > 0
-        ? replyTemplates[replyTemplateIndex]
+        ? strictGenres.length > 0
+          ? `Here are only ${strictGenres.join(" and ")} picks: ${recommendations
+            .map((recommendation) => recommendation.title)
+            .join(", ")}.`
+          : replyTemplates[replyTemplateIndex]
         : "I need a bit more detail about your favorite genres or anime to recommend confidently.",
     recommendations,
     extractedPreferences: normalizeList([...preferences, ...signals.inferredPreferences]),
@@ -995,7 +1112,7 @@ const buildGeminiChatPrompt = (payload: {
 
   return [
     "You are an anime recommendation assistant for an anime reviews app.",
-    "Speak naturally like a human expert fan, concise but warm.",
+    "Speak naturally like a human expert fan, warm and conversational.",
     "Use user watched anime, preferences and recent in-app text signals to personalize recommendations.",
     "Return only valid JSON in this schema:",
     "{",
@@ -1016,7 +1133,7 @@ const buildGeminiChatPrompt = (payload: {
     "- Avoid watched anime in recommendations.",
     "- Never recommend anime from the excluded list.",
     "- If user asks for alternatives, do not repeat titles already suggested in this chat.",
-    "- Keep `reply` concise (1-3 sentences) and conversational.",
+    "- Write `reply` naturally (2-6 sentences), as if chatting directly with the user.",
     "- Make reasons specific (theme, pacing, tone, or character writing), not generic.",
     "- Confidence must be 1-100.",
     "- Keep titles as canonical names.",
@@ -1034,9 +1151,10 @@ const buildGeminiChatPrompt = (payload: {
 const parseGeminiChatResponse = (
   textResponse: string,
   fallback: ChatRecommendationResponse,
-  excludedTitles: Set<string>
+  excludedTitles: Set<string>,
+  strictGenres: string[]
 ): ChatRecommendationResponse => {
-  const parsed = JSON.parse(extractJsonFromText(textResponse));
+  const parsed = parseGeminiJsonObject<any>(textResponse);
 
   const recommendations = Array.isArray(parsed?.recommendations)
     ? parsed.recommendations
@@ -1053,8 +1171,14 @@ const parseGeminiChatResponse = (
         .slice(0, 5)
     : [];
 
-  const safeGeminiRecommendations = sanitizeRecommendations(recommendations, excludedTitles);
-  const safeFallbackRecommendations = sanitizeRecommendations(fallback.recommendations, excludedTitles);
+  const safeGeminiRecommendations = filterRecommendationsByStrictGenres(
+    sanitizeRecommendations(recommendations, excludedTitles),
+    strictGenres
+  );
+  const safeFallbackRecommendations = filterRecommendationsByStrictGenres(
+    sanitizeRecommendations(fallback.recommendations, excludedTitles),
+    strictGenres
+  );
 
   const extractedPreferences = Array.isArray(parsed?.extractedPreferences)
     ? normalizeList(parsed.extractedPreferences.map((item: unknown) => String(item)))
@@ -1062,7 +1186,7 @@ const parseGeminiChatResponse = (
 
   return {
     source: "gemini",
-    reply: String(parsed?.reply || fallback.reply),
+    reply: String(parsed?.reply || ""),
     recommendations:
       safeGeminiRecommendations.length > 0
         ? safeGeminiRecommendations
@@ -1078,16 +1202,10 @@ const analyzeChatWithGemini = async (
   fallback: ChatRecommendationResponse,
   excludedTitles: Set<string>,
   recentAssistantTitles: string[],
-  wantsAlternatives: boolean
+  wantsAlternatives: boolean,
+  strictGenres: string[]
 ): Promise<ChatRecommendationResponse> => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
   const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-  const geminiApiUrl =
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
-
-  if (!geminiApiKey) {
-    throw new Error("GEMINI_API_KEY is not configured");
-  }
 
   const prompt = buildGeminiChatPrompt({
     message: payload.message,
@@ -1100,34 +1218,14 @@ const analyzeChatWithGemini = async (
     wantsAlternatives,
   });
 
-  const response = await axios.post(
-    geminiApiUrl,
-    {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.45,
-        responseMimeType: "application/json",
-      },
-    },
-    {
-      params: {
-        key: geminiApiKey,
-      },
-      timeout: 12000,
-    }
-  );
+  const textResponse = await generateGeminiResponseText({
+    prompt,
+    model: geminiModel,
+    temperature: AI_CHAT_GEMINI_TEMPERATURE,
+    timeoutMs: 12000,
+  });
 
-  const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!textResponse || typeof textResponse !== "string") {
-    throw new Error("Gemini returned empty response for chat recommendations");
-  }
-
-  return parseGeminiChatResponse(textResponse, fallback, excludedTitles);
+  return parseGeminiChatResponse(textResponse, fallback, excludedTitles, strictGenres);
 };
 
 const parseGeminiInsights = (
@@ -1135,7 +1233,7 @@ const parseGeminiInsights = (
   textResponse: string,
   fallback: AnimeQueryInsights
 ): AnimeQueryInsights => {
-  const parsed = JSON.parse(extractJsonFromText(textResponse));
+  const parsed = parseGeminiJsonObject<any>(textResponse);
 
   const keywords =
     Array.isArray(parsed?.keywords) && parsed.keywords.length > 0
@@ -1180,45 +1278,16 @@ const parseGeminiInsights = (
 };
 
 const analyzeWithGemini = async (normalizedQuery: string): Promise<AnimeQueryInsights> => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
   const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-  const geminiApiUrl =
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
-
-  if (!geminiApiKey) {
-    throw new Error("GEMINI_API_KEY is not configured");
-  }
 
   const prompt = buildGeminiPrompt(normalizedQuery);
   const fallback = buildFallbackInsights(normalizedQuery);
-
-  const response = await axios.post(
-    geminiApiUrl,
-    {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-      },
-    },
-    {
-      params: {
-        key: geminiApiKey,
-      },
-      timeout: 10000,
-    }
-  );
-
-  const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!textResponse || typeof textResponse !== "string") {
-    throw new Error("Gemini returned empty response");
-  }
+  const textResponse = await generateGeminiResponseText({
+    prompt,
+    model: geminiModel,
+    temperature: 0.2,
+    timeoutMs: 10000,
+  });
 
   return parseGeminiInsights(normalizedQuery, textResponse, fallback);
 };
@@ -1368,13 +1437,27 @@ export const getAnimeRecommendationChat = async (
     wantsAlternatives,
   });
 
-  const canUseCache = !wantsAlternatives;
+  const externalEnabled = process.env.AI_EXTERNAL_ENABLED === "true";
+  const hasGeminiApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const canUseCache =
+    !wantsAlternatives &&
+    !(AI_CHAT_DISABLE_CACHE_WHEN_EXTERNAL && externalEnabled && hasGeminiApiKey);
+
   const cached = canUseCache
     ? getFromCacheIfFresh(chatCache, cacheKey, AI_CHAT_CACHE_TTL_MS)
     : null;
   if (cached) {
-    recordChatOutcomeMetrics(payload.userId, cached.response);
-    return cached.response;
+    return finalizeChatResponse({
+      userId: payload.userId,
+      response: cached.response,
+      responseSeed: `${cacheKey}:cached`,
+      replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
+      replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
+      recordChatOutcomeMetrics,
+      normalizeQuery,
+      normalizeList,
+      hashString,
+    });
   }
 
   const signals = await buildUserSignals(payload.userId);
@@ -1391,9 +1474,7 @@ export const getAnimeRecommendationChat = async (
     excludedTitles,
     responseVariantSeed,
   });
-
-  const externalEnabled = process.env.AI_EXTERNAL_ENABLED === "true";
-  const hasGeminiApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const strictGenres = extractStrictGenreConstraints(payload.message, history);
 
   try {
     if (externalEnabled && hasGeminiApiKey) {
@@ -1403,27 +1484,65 @@ export const getAnimeRecommendationChat = async (
         fallback,
         excludedTitles,
         Array.from(assistantMentionedTitles),
-        wantsAlternatives
+        wantsAlternatives,
+        strictGenres
       );
-      if (canUseCache) {
-        setCacheEntry(chatCache, cacheKey, { response: result, createdAt: Date.now() }, AI_CHAT_CACHE_MAX_ENTRIES);
+      const geminiReply = String(result.reply || "").trim();
+      const hasGeminiReply = geminiReply.length > 0;
+      const withReply = hasGeminiReply
+        ? result
+        : {
+          ...result,
+          reply: result.recommendations.length > 0
+            ? `Here are ${strictGenres.length > 0 ? `only ${strictGenres.join(" and ")} ` : ""}picks that fit what you asked for: ${result.recommendations.map((item) => item.title).join(", ")}.`
+            : "I could not find enough matching titles right now. Share one or two examples and I will recalibrate.",
+        };
+      const finalizedResult = finalizeChatResponse({
+        userId: payload.userId,
+        response: withReply,
+        responseSeed: `${cacheKey}:gemini`,
+        replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
+        replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
+        recordChatOutcomeMetrics,
+        normalizeQuery,
+        normalizeList,
+        hashString,
+      });
+
+      if (canUseCache && shouldCacheChatResponse(finalizedResult)) {
+        setCacheEntry(
+          chatCache,
+          cacheKey,
+          { response: finalizedResult, createdAt: Date.now() },
+          AI_CHAT_CACHE_MAX_ENTRIES
+        );
       }
-      recordChatOutcomeMetrics(payload.userId, result);
-      return result;
+      return finalizedResult;
     }
   } catch (error) {
     console.error("Error contacting Gemini for recommendation chat:", error);
     const fallbackWithReason = withFallbackReason(fallback, "gemini-error");
+    const finalizedFallbackError = finalizeChatResponse({
+      userId: payload.userId,
+      response: fallbackWithReason,
+      responseSeed: `${cacheKey}:gemini-error`,
+      replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
+      replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
+      recordChatOutcomeMetrics,
+      normalizeQuery,
+      normalizeList,
+      hashString,
+    });
+
     if (canUseCache) {
       setCacheEntry(
         chatCache,
         cacheKey,
-        { response: fallbackWithReason, createdAt: Date.now() },
+        { response: finalizedFallbackError, createdAt: Date.now() },
         AI_CHAT_CACHE_MAX_ENTRIES
       );
     }
-    recordChatOutcomeMetrics(payload.userId, fallbackWithReason);
-    return fallbackWithReason;
+    return finalizedFallbackError;
   }
 
   const fallbackReason = !externalEnabled
@@ -1433,14 +1552,25 @@ export const getAnimeRecommendationChat = async (
       : "gemini-error";
 
   const fallbackWithReason = withFallbackReason(fallback, fallbackReason);
+  const finalizedFallback = finalizeChatResponse({
+    userId: payload.userId,
+    response: fallbackWithReason,
+    responseSeed: `${cacheKey}:${fallbackReason}`,
+    replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
+    replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
+    recordChatOutcomeMetrics,
+    normalizeQuery,
+    normalizeList,
+    hashString,
+  });
+
   if (canUseCache) {
     setCacheEntry(
       chatCache,
       cacheKey,
-      { response: fallbackWithReason, createdAt: Date.now() },
+      { response: finalizedFallback, createdAt: Date.now() },
       AI_CHAT_CACHE_MAX_ENTRIES
     );
   }
-  recordChatOutcomeMetrics(payload.userId, fallbackWithReason);
-  return fallbackWithReason;
+  return finalizedFallback;
 };
