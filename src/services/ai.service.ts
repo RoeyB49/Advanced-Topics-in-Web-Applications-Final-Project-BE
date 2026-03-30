@@ -81,6 +81,7 @@ export type AnimeQueryInsights = {
 const queryCache = new Map<string, CacheEntry>();
 let lastExternalRequestAt = 0;
 const chatCache = new Map<string, { response: ChatRecommendationResponse; createdAt: number }>();
+const lastGeminiChatRequestAtByUser = new Map<string, number>();
 
 const getFromCacheIfFresh = <T extends { createdAt: number }>(
   cache: Map<string, T>,
@@ -121,13 +122,18 @@ const setCacheEntry = <T>(
 };
 
 const resolveGeminiModelCandidates = (): string[] => {
-  const preferred = (process.env.GEMINI_MODEL || "").trim();
+  const preferred = (process.env.GEMINI_MODEL || process.env.AI_CHAT_MODEL || "").trim();
   const extra = (process.env.GEMINI_MODEL_CANDIDATES || "")
     .split(",")
     .map((model) => model.trim())
     .filter(Boolean);
 
-  return [preferred, ...extra, ...DEFAULT_GEMINI_MODELS]
+  const explicitModels = [preferred, ...extra].filter(Boolean);
+  const models = explicitModels.length > 0
+    ? explicitModels
+    : DEFAULT_GEMINI_MODELS;
+
+  return models
     .map((model) => model.trim())
     .filter(Boolean)
     .filter((model, index, array) => array.indexOf(model) === index);
@@ -141,6 +147,19 @@ const isGeminiModelNotFoundError = (error: any): boolean => {
 
   const message = String(error?.message || "").toLowerCase();
   return message.includes("not found") || message.includes("404");
+};
+
+const isGeminiRateLimitedError = (error: any): boolean => {
+  return Number(error?.response?.status) === 429;
+};
+
+const summarizeGeminiError = (error: any): Record<string, unknown> => {
+  return {
+    status: Number(error?.response?.status || 0) || undefined,
+    code: String(error?.code || "") || undefined,
+    message: String(error?.message || "Gemini request failed"),
+    model: error?.config?.url ? String(error.config.url).split("/models/")[1]?.split(":")[0] : undefined,
+  };
 };
 
 const generateGeminiTextWithFallbackModel = async (params: {
@@ -1531,6 +1550,35 @@ export const getAnimeRecommendationChat = async (
 
   try {
     if (externalEnabled && hasGeminiApiKey) {
+      const now = Date.now();
+      const lastGeminiAt = lastGeminiChatRequestAtByUser.get(payload.userId) || 0;
+      if (now - lastGeminiAt < AI_CHAT_MIN_INTERVAL_MS) {
+        const throttledFallback = withFallbackReason(fallback, "chat-rate-limited");
+        const finalizedThrottledFallback = finalizeChatResponse({
+          userId: payload.userId,
+          response: throttledFallback,
+          responseSeed: `${cacheKey}:chat-rate-limited-local`,
+          replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
+          replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
+          recordChatOutcomeMetrics,
+          normalizeQuery,
+          normalizeList,
+          hashString,
+        });
+
+        if (canUseCache) {
+          setCacheEntry(
+            chatCache,
+            cacheKey,
+            { response: finalizedThrottledFallback, createdAt: Date.now() },
+            AI_CHAT_CACHE_MAX_ENTRIES
+          );
+        }
+
+        return finalizedThrottledFallback;
+      }
+
+      lastGeminiChatRequestAtByUser.set(payload.userId, now);
       const result = await analyzeChatWithGemini(
         payload,
         signals.snippets,
@@ -1573,12 +1621,13 @@ export const getAnimeRecommendationChat = async (
       return finalizedResult;
     }
   } catch (error) {
-    console.error("Error contacting Gemini for recommendation chat:", error);
-    const fallbackWithReason = withFallbackReason(fallback, "gemini-error");
+    const fallbackReason = isGeminiRateLimitedError(error) ? "chat-rate-limited" : "gemini-error";
+    console.error("Error contacting Gemini for recommendation chat:", summarizeGeminiError(error));
+    const fallbackWithReason = withFallbackReason(fallback, fallbackReason);
     const finalizedFallbackError = finalizeChatResponse({
       userId: payload.userId,
       response: fallbackWithReason,
-      responseSeed: `${cacheKey}:gemini-error`,
+      responseSeed: `${cacheKey}:${fallbackReason}`,
       replyHistoryTtlMs: AI_CHAT_REPLY_HISTORY_TTL_MS,
       replyHistoryMaxItems: AI_CHAT_REPLY_HISTORY_MAX_ITEMS,
       recordChatOutcomeMetrics,
