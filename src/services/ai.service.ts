@@ -60,6 +60,8 @@ const AI_CHAT_GEMINI_TEMPERATURE = parseFloat(
 const AI_CHAT_DISABLE_CACHE_WHEN_EXTERNAL =
   process.env.AI_CHAT_DISABLE_CACHE_WHEN_EXTERNAL !== "false";
 
+const DEFAULT_GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+
 type CacheEntry = {
   insights: AnimeQueryInsights;
   keywords: string[];
@@ -116,6 +118,58 @@ const setCacheEntry = <T>(
     }
     cache.delete(oldestKey);
   }
+};
+
+const resolveGeminiModelCandidates = (): string[] => {
+  const preferred = (process.env.GEMINI_MODEL || "").trim();
+  const extra = (process.env.GEMINI_MODEL_CANDIDATES || "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+
+  return [preferred, ...extra, ...DEFAULT_GEMINI_MODELS]
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .filter((model, index, array) => array.indexOf(model) === index);
+};
+
+const isGeminiModelNotFoundError = (error: any): boolean => {
+  const status = Number(error?.response?.status);
+  if (status === 404) {
+    return true;
+  }
+
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("not found") || message.includes("404");
+};
+
+const generateGeminiTextWithFallbackModel = async (params: {
+  prompt: string;
+  temperature: number;
+  timeoutMs: number;
+}): Promise<{ text: string; model: string }> => {
+  const models = resolveGeminiModelCandidates();
+  let lastError: any;
+
+  for (const model of models) {
+    try {
+      const text = await generateGeminiResponseText({
+        prompt: params.prompt,
+        model,
+        temperature: params.temperature,
+        timeoutMs: params.timeoutMs,
+      });
+      return { text, model };
+    } catch (error: any) {
+      lastError = error;
+      if (!isGeminiModelNotFoundError(error)) {
+        throw error;
+      }
+      console.warn(`Gemini model '${model}' returned not-found, trying next candidate.`);
+    }
+  }
+
+  throw lastError || new Error("Failed to call Gemini with all configured model candidates");
 };
 
 export type ChatRole = "user" | "assistant";
@@ -1205,8 +1259,6 @@ const analyzeChatWithGemini = async (
   wantsAlternatives: boolean,
   strictGenres: string[]
 ): Promise<ChatRecommendationResponse> => {
-  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-
   const prompt = buildGeminiChatPrompt({
     message: payload.message,
     watchedAnimes: normalizeList(payload.watchedAnimes),
@@ -1218,12 +1270,13 @@ const analyzeChatWithGemini = async (
     wantsAlternatives,
   });
 
-  const textResponse = await generateGeminiResponseText({
+  const geminiResponse = await generateGeminiTextWithFallbackModel({
     prompt,
-    model: geminiModel,
     temperature: AI_CHAT_GEMINI_TEMPERATURE,
     timeoutMs: 12000,
   });
+
+  const textResponse = geminiResponse.text;
 
   return parseGeminiChatResponse(textResponse, fallback, excludedTitles, strictGenres);
 };
@@ -1278,16 +1331,16 @@ const parseGeminiInsights = (
 };
 
 const analyzeWithGemini = async (normalizedQuery: string): Promise<AnimeQueryInsights> => {
-  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-
   const prompt = buildGeminiPrompt(normalizedQuery);
   const fallback = buildFallbackInsights(normalizedQuery);
-  const textResponse = await generateGeminiResponseText({
+
+  const geminiResponse = await generateGeminiTextWithFallbackModel({
     prompt,
-    model: geminiModel,
     temperature: 0.2,
     timeoutMs: 10000,
   });
+
+  const textResponse = geminiResponse.text;
 
   return parseGeminiInsights(normalizedQuery, textResponse, fallback);
 };
