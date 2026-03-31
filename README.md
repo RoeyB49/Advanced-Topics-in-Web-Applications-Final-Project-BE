@@ -47,8 +47,14 @@ The recommendation chat now supports a dedicated catalog data file plus runtime 
 
 Useful environment variables:
 
-- `AI_EXTERNAL_ENABLED` (`true`/`false`) - enables Gemini calls.
-- `GEMINI_API_KEY` - Gemini API key.
+- `AI_EXTERNAL_ENABLED` (`true`/`false`) - enables external AI calls.
+- `AI_EXTERNAL_PROVIDER` - external provider name (`groq` or `gemini`). Default: `groq`.
+- `GROQ_API_KEY` - Groq API key (used when provider is `groq`).
+- `GROQ_MODEL` - Groq model name. Default: `llama-3.3-70b-versatile`.
+- `GEMINI_API_KEY` - Gemini API key (used when provider is `gemini`).
+- `GEMINI_MODEL` - Gemini model name. Default: `gemini-1.5-flash`.
+- `AI_EXTERNAL_API_KEY` - optional shared key variable used when provider-specific key is not set.
+- `AI_CHAT_MODEL` - optional legacy fallback model override for Gemini mode.
 - `AI_CATALOG_PATH` - optional absolute/relative path to catalog JSON. Default loader checks:
   - `src/data/anime-catalog.json`
   - `dist/data/anime-catalog.json`
@@ -72,7 +78,7 @@ Authenticated endpoint:
 Returns an in-memory snapshot with:
 
 - total chat requests
-- Gemini usage percentage
+- external provider usage percentage
 - fallback reason counters
 - recommendation repetition rate
 - catalog size and last successful catalog load time

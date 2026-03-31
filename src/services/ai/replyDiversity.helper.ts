@@ -2,7 +2,7 @@ export type FallbackReason =
   | "external-disabled"
   | "missing-api-key"
   | "chat-rate-limited"
-  | "gemini-error";
+  | "external-error";
 
 export type AnimeRecommendationLite = {
   title: string;
@@ -149,7 +149,7 @@ export const finalizeChatResponse = <T extends ChatRecommendationResponseShape>(
 };
 
 export const shouldCacheChatResponse = (response: ChatRecommendationResponseShape): boolean => {
-  return response.debug?.fallbackReason !== "gemini-error";
+  return response.debug?.fallbackReason !== "external-error";
 };
 
 export const clearReplyDiversityHistory = () => {
