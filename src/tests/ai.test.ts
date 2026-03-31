@@ -291,39 +291,35 @@ describe("AI Endpoints", () => {
     expect(String(res.body.reply).toLowerCase()).not.toContain("sports");
   });
 
-  it("should return gemini recommendations when external AI is enabled", async () => {
+  it("should return groq recommendations when external AI is enabled", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
-    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
 
     mockedAxios.post.mockResolvedValueOnce({
       data: {
-        candidates: [
+        choices: [
           {
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    reply: "You should try Vinland Saga and Monster for mature dark themes.",
-                    extractedPreferences: ["dark", "thriller", "seinen"],
-                    recommendations: [
-                      {
-                        title: "Vinland Saga",
-                        reason: "Strong character writing with mature war themes.",
-                        genres: ["action", "drama", "seinen"],
-                        mood: "serious",
-                        confidence: 88,
-                      },
-                      {
-                        title: "Monster",
-                        reason: "Psychological suspense and deep moral conflict.",
-                        genres: ["mystery", "thriller", "seinen"],
-                        mood: "dark",
-                        confidence: 90,
-                      },
-                    ],
-                  }),
-                },
-              ],
+            message: {
+              content: JSON.stringify({
+                reply: "You should try Vinland Saga and Monster for mature dark themes.",
+                extractedPreferences: ["dark", "thriller", "seinen"],
+                recommendations: [
+                  {
+                    title: "Vinland Saga",
+                    reason: "Strong character writing with mature war themes.",
+                    genres: ["action", "drama", "seinen"],
+                    mood: "serious",
+                    confidence: 88,
+                  },
+                  {
+                    title: "Monster",
+                    reason: "Psychological suspense and deep moral conflict.",
+                    genres: ["mystery", "thriller", "seinen"],
+                    mood: "dark",
+                    confidence: 90,
+                  },
+                ],
+              }),
             },
           },
         ],
@@ -344,14 +340,14 @@ describe("AI Endpoints", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty("source", "gemini");
+    expect(res.body).toHaveProperty("source", "groq");
     expect(res.body.debug).toBeUndefined();
     expect(res.body.recommendations[0]).toHaveProperty("title", "Vinland Saga");
     expect(mockedAxios.post).toHaveBeenCalledWith(
-      expect.stringContaining("generativelanguage.googleapis.com"),
+      expect.stringContaining("api.groq.com/openai/v1/chat/completions"),
       expect.any(Object),
       expect.objectContaining({
-        params: expect.objectContaining({ key: "test-gemini-key" }),
+        headers: expect.objectContaining({ Authorization: "Bearer test-groq-key" }),
       })
     );
 
@@ -360,31 +356,27 @@ describe("AI Endpoints", () => {
 
   it("should not return stale cached response when history changes", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
-    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
 
     mockedAxios.post
       .mockResolvedValueOnce({
         data: {
-          candidates: [
+          choices: [
             {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      reply: "First response",
-                      extractedPreferences: ["thriller"],
-                      recommendations: [
-                        {
-                          title: "Monster",
-                          reason: "Dark psychological tension.",
-                          genres: ["mystery", "thriller", "seinen"],
-                          mood: "dark",
-                          confidence: 90,
-                        },
-                      ],
-                    }),
-                  },
-                ],
+              message: {
+                content: JSON.stringify({
+                  reply: "First response",
+                  extractedPreferences: ["thriller"],
+                  recommendations: [
+                    {
+                      title: "Monster",
+                      reason: "Dark psychological tension.",
+                      genres: ["mystery", "thriller", "seinen"],
+                      mood: "dark",
+                      confidence: 90,
+                    },
+                  ],
+                }),
               },
             },
           ],
@@ -392,26 +384,22 @@ describe("AI Endpoints", () => {
       } as any)
       .mockResolvedValueOnce({
         data: {
-          candidates: [
+          choices: [
             {
-              content: {
-                parts: [
-                  {
-                    text: JSON.stringify({
-                      reply: "Second response",
-                      extractedPreferences: ["thriller", "mind games"],
-                      recommendations: [
-                        {
-                          title: "Death Note",
-                          reason: "High-stakes mind games and strategy.",
-                          genres: ["thriller", "mystery"],
-                          mood: "strategic",
-                          confidence: 87,
-                        },
-                      ],
-                    }),
-                  },
-                ],
+              message: {
+                content: JSON.stringify({
+                  reply: "Second response",
+                  extractedPreferences: ["thriller", "mind games"],
+                  recommendations: [
+                    {
+                      title: "Death Note",
+                      reason: "High-stakes mind games and strategy.",
+                      genres: ["thriller", "mystery"],
+                      mood: "strategic",
+                      confidence: 87,
+                    },
+                  ],
+                }),
               },
             },
           ],
@@ -451,39 +439,35 @@ describe("AI Endpoints", () => {
     process.env.AI_EXTERNAL_ENABLED = "false";
   });
 
-  it("should remove rejected titles from gemini output", async () => {
+  it("should remove rejected titles from groq output", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
-    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
 
     mockedAxios.post.mockResolvedValueOnce({
       data: {
-        candidates: [
+        choices: [
           {
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    reply: "Try these picks",
-                    extractedPreferences: ["thriller"],
-                    recommendations: [
-                      {
-                        title: "Monster",
-                        reason: "Dark psychological thriller.",
-                        genres: ["mystery", "thriller", "seinen"],
-                        mood: "dark",
-                        confidence: 92,
-                      },
-                      {
-                        title: "Steins;Gate",
-                        reason: "Strong tension and twists.",
-                        genres: ["sci-fi", "thriller", "drama"],
-                        mood: "tense",
-                        confidence: 88,
-                      },
-                    ],
-                  }),
-                },
-              ],
+            message: {
+              content: JSON.stringify({
+                reply: "Try these picks",
+                extractedPreferences: ["thriller"],
+                recommendations: [
+                  {
+                    title: "Monster",
+                    reason: "Dark psychological thriller.",
+                    genres: ["mystery", "thriller", "seinen"],
+                    mood: "dark",
+                    confidence: 92,
+                  },
+                  {
+                    title: "Steins;Gate",
+                    reason: "Strong tension and twists.",
+                    genres: ["sci-fi", "thriller", "drama"],
+                    mood: "tense",
+                    confidence: 88,
+                  },
+                ],
+              }),
             },
           },
         ],
@@ -500,7 +484,7 @@ describe("AI Endpoints", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body).toHaveProperty("source", "gemini");
+    expect(res.body).toHaveProperty("source", "groq");
     const titles = res.body.recommendations.map((item: { title: string }) => item.title);
     expect(titles).not.toContain("Monster");
 
@@ -541,14 +525,14 @@ describe("AI Endpoints", () => {
 
     expect(metricsRes.status).toBe(200);
     expect(metricsRes.body).toHaveProperty("totalChatRequests");
-    expect(metricsRes.body).toHaveProperty("geminiUsageRate");
+    expect(metricsRes.body).toHaveProperty("externalUsageRate");
     expect(metricsRes.body).toHaveProperty("repetitionRate");
     expect(metricsRes.body).toHaveProperty("fallbackReasons");
     expect(metricsRes.body).toHaveProperty("catalogSize");
     expect(metricsRes.body).toHaveProperty("rollingWindow");
     expect(metricsRes.body.rollingWindow).toHaveProperty("windowMs");
     expect(metricsRes.body.rollingWindow).toHaveProperty("totalChatRequests");
-    expect(metricsRes.body.rollingWindow).toHaveProperty("geminiUsageRate");
+    expect(metricsRes.body.rollingWindow).toHaveProperty("externalUsageRate");
     expect(metricsRes.body.rollingWindow.totalChatRequests).toBeGreaterThan(0);
     expect(metricsRes.body.totalChatRequests).toBeGreaterThan(0);
     expect(metricsRes.body.catalogSize).toBeGreaterThan(0);
@@ -587,7 +571,7 @@ describe("AI Endpoints", () => {
 
     expect(resetRes.status).toBe(200);
     expect(resetRes.body).toHaveProperty("totalChatRequests", 0);
-    expect(resetRes.body).toHaveProperty("geminiResponses", 0);
+    expect(resetRes.body).toHaveProperty("externalResponses", 0);
     expect(resetRes.body).toHaveProperty("fallbackResponses", 0);
     expect(resetRes.body).toHaveProperty("rollingWindow.totalChatRequests", 0);
 

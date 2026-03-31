@@ -47,7 +47,7 @@ export type AnimeQueryInsights = {
   detectedGenres: string[];
   sentimentHint: "positive" | "negative" | "mixed" | "neutral";
   intent: "recommendation" | "comparison" | "analysis" | "general-search";
-  source: "gemini" | "fallback";
+  source: "groq" | "gemini" | "fallback";
 };
 
 const queryCache = new Map<string, CacheEntry>();
@@ -108,12 +108,12 @@ export type AnimeRecommendation = {
 };
 
 export type ChatRecommendationResponse = {
-  source: "gemini" | "fallback";
+  source: "groq" | "gemini" | "fallback";
   reply: string;
   recommendations: AnimeRecommendation[];
   extractedPreferences: string[];
   debug?: {
-    fallbackReason?: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error";
+    fallbackReason?: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "external-error";
   };
   basedOn: {
     watchedCount: number;
@@ -122,11 +122,11 @@ export type ChatRecommendationResponse = {
   };
 };
 
-type FallbackReason = "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error";
+type FallbackReason = "external-disabled" | "missing-api-key" | "chat-rate-limited" | "external-error";
 
 type AiAdvisorMetrics = {
   totalChatRequests: number;
-  geminiResponses: number;
+  externalResponses: number;
   fallbackResponses: number;
   fallbackReasons: Record<FallbackReason, number>;
   responsesWithRecommendations: number;
@@ -135,7 +135,7 @@ type AiAdvisorMetrics = {
 
 type ChatMetricEvent = {
   createdAt: number;
-  source: "gemini" | "fallback";
+  source: "groq" | "gemini" | "fallback";
   fallbackReason?: FallbackReason;
   hasRecommendations: boolean;
   repeatedRecommendation: boolean;
@@ -330,18 +330,18 @@ const FALLBACK_REASON_KEYS: FallbackReason[] = [
   "external-disabled",
   "missing-api-key",
   "chat-rate-limited",
-  "gemini-error",
+  "external-error",
 ];
 
 const aiAdvisorMetrics: AiAdvisorMetrics = {
   totalChatRequests: 0,
-  geminiResponses: 0,
+  externalResponses: 0,
   fallbackResponses: 0,
   fallbackReasons: {
     "external-disabled": 0,
     "missing-api-key": 0,
     "chat-rate-limited": 0,
-    "gemini-error": 0,
+    "external-error": 0,
   },
   responsesWithRecommendations: 0,
   repeatedRecommendationResponses: 0,
@@ -354,7 +354,7 @@ const emptyFallbackReasonCounters = (): Record<FallbackReason, number> => ({
   "external-disabled": 0,
   "missing-api-key": 0,
   "chat-rate-limited": 0,
-  "gemini-error": 0,
+  "external-error": 0,
 });
 
 const pruneOldChatMetricEvents = () => {
@@ -368,19 +368,19 @@ const getRollingWindowMetrics = () => {
   pruneOldChatMetricEvents();
 
   const fallbackReasons = emptyFallbackReasonCounters();
-  let geminiResponses = 0;
+  let externalResponses = 0;
   let fallbackResponses = 0;
   let responsesWithRecommendations = 0;
   let repeatedRecommendationResponses = 0;
 
   chatMetricEvents.forEach((event) => {
-    if (event.source === "gemini") {
-      geminiResponses += 1;
-    } else {
+    if (event.source === "fallback") {
       fallbackResponses += 1;
       if (event.fallbackReason) {
         fallbackReasons[event.fallbackReason] += 1;
       }
+    } else {
+      externalResponses += 1;
     }
 
     if (event.hasRecommendations) {
@@ -392,8 +392,8 @@ const getRollingWindowMetrics = () => {
   });
 
   const totalChatRequests = chatMetricEvents.length;
-  const geminiUsageRate = totalChatRequests > 0
-    ? Number(((geminiResponses / totalChatRequests) * 100).toFixed(2))
+  const externalUsageRate = totalChatRequests > 0
+    ? Number(((externalResponses / totalChatRequests) * 100).toFixed(2))
     : 0;
   const repetitionRate = responsesWithRecommendations > 0
     ? Number(((repeatedRecommendationResponses / responsesWithRecommendations) * 100).toFixed(2))
@@ -402,12 +402,12 @@ const getRollingWindowMetrics = () => {
   return {
     windowMs: AI_METRICS_ROLLING_WINDOW_MS,
     totalChatRequests,
-    geminiResponses,
+    externalResponses,
     fallbackResponses,
     fallbackReasons,
     responsesWithRecommendations,
     repeatedRecommendationResponses,
-    geminiUsageRate,
+    externalUsageRate,
     repetitionRate,
   };
 };
@@ -438,14 +438,14 @@ const getRecentRecommendationTitlesForUser = (userId: string, roundsToInclude = 
 const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationResponse) => {
   aiAdvisorMetrics.totalChatRequests += 1;
 
-  if (response.source === "gemini") {
-    aiAdvisorMetrics.geminiResponses += 1;
-  } else {
+  if (response.source === "fallback") {
     aiAdvisorMetrics.fallbackResponses += 1;
     const fallbackReason = response.debug?.fallbackReason;
     if (fallbackReason && FALLBACK_REASON_KEYS.includes(fallbackReason)) {
       aiAdvisorMetrics.fallbackReasons[fallbackReason] += 1;
     }
+  } else {
+    aiAdvisorMetrics.externalResponses += 1;
   }
 
   const currentTitles = response.recommendations.map((recommendation) => recommendation.title.toLowerCase());
@@ -486,8 +486,8 @@ const recordChatOutcomeMetrics = (userId: string, response: ChatRecommendationRe
 };
 
 export const getAiAdvisorMetrics = () => {
-  const geminiUsageRate = aiAdvisorMetrics.totalChatRequests > 0
-    ? Number(((aiAdvisorMetrics.geminiResponses / aiAdvisorMetrics.totalChatRequests) * 100).toFixed(2))
+  const externalUsageRate = aiAdvisorMetrics.totalChatRequests > 0
+    ? Number(((aiAdvisorMetrics.externalResponses / aiAdvisorMetrics.totalChatRequests) * 100).toFixed(2))
     : 0;
   const repetitionRate = aiAdvisorMetrics.responsesWithRecommendations > 0
     ? Number((
@@ -501,7 +501,7 @@ export const getAiAdvisorMetrics = () => {
     catalogPath: activeCatalogPath,
     catalogMtimeMs: activeCatalogMtimeMs,
     catalogLastLoadedAt: new Date(lastCatalogLoadedAt).toISOString(),
-    geminiUsageRate,
+    externalUsageRate,
     repetitionRate,
     rollingWindow: getRollingWindowMetrics(),
   };
@@ -509,7 +509,7 @@ export const getAiAdvisorMetrics = () => {
 
 export const resetAiAdvisorMetrics = () => {
   aiAdvisorMetrics.totalChatRequests = 0;
-  aiAdvisorMetrics.geminiResponses = 0;
+  aiAdvisorMetrics.externalResponses = 0;
   aiAdvisorMetrics.fallbackResponses = 0;
   aiAdvisorMetrics.responsesWithRecommendations = 0;
   aiAdvisorMetrics.repeatedRecommendationResponses = 0;
@@ -765,7 +765,7 @@ const extractJsonFromText = (text: string): string => {
   const end = text.lastIndexOf("}");
 
   if (start === -1 || end === -1 || end <= start) {
-    throw new Error("Gemini response does not contain a JSON object");
+    throw new Error("External AI response does not contain a JSON object");
   }
 
   return text.slice(start, end + 1);
@@ -970,7 +970,7 @@ const buildFallbackChatRecommendations = async (
 
 const withFallbackReason = (
   response: ChatRecommendationResponse,
-  reason: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "gemini-error"
+  reason: "external-disabled" | "missing-api-key" | "chat-rate-limited" | "external-error"
 ): ChatRecommendationResponse => ({
   ...response,
   debug: {
@@ -1031,10 +1031,113 @@ const buildGeminiChatPrompt = (payload: {
   ].join("\n");
 };
 
+type ExternalProvider = "groq" | "gemini";
+
+const resolveExternalProvider = (): ExternalProvider => {
+  const configured = String(process.env.AI_EXTERNAL_PROVIDER || "groq").trim().toLowerCase();
+  return configured === "gemini" ? "gemini" : "groq";
+};
+
+const getExternalApiKey = (provider: ExternalProvider): string => {
+  const sharedKey = process.env.AI_EXTERNAL_API_KEY;
+  if (provider === "gemini") {
+    return process.env.GEMINI_API_KEY || sharedKey || "";
+  }
+  return process.env.GROQ_API_KEY || sharedKey || "";
+};
+
+const getExternalModel = (provider: ExternalProvider): string => {
+  if (provider === "gemini") {
+    return process.env.GEMINI_MODEL || process.env.AI_CHAT_MODEL || "gemini-1.5-flash";
+  }
+
+  return process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+};
+
+const requestExternalJsonText = async (
+  provider: ExternalProvider,
+  prompt: string,
+  temperature: number,
+  timeoutMs: number
+): Promise<string> => {
+  const model = getExternalModel(provider);
+  const apiKey = getExternalApiKey(provider);
+
+  if (!apiKey) {
+    throw new Error("External AI API key is not configured");
+  }
+
+  if (provider === "gemini") {
+    const geminiApiUrl =
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    const response = await axios.post(
+      geminiApiUrl,
+      {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }],
+          },
+        ],
+        generationConfig: {
+          temperature,
+          responseMimeType: "application/json",
+        },
+      },
+      {
+        params: {
+          key: apiKey,
+        },
+        timeout: timeoutMs,
+      }
+    );
+
+    const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textResponse || typeof textResponse !== "string") {
+      throw new Error("External AI returned empty response");
+    }
+    return textResponse;
+  }
+
+  const response = await axios.post(
+    "https://api.groq.com/openai/v1/chat/completions",
+    {
+      model,
+      messages: [
+        {
+          role: "system",
+          content: "Return only valid JSON for the requested schema.",
+        },
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      response_format: { type: "json_object" },
+      temperature,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      timeout: timeoutMs,
+    }
+  );
+
+  const textResponse = response.data?.choices?.[0]?.message?.content;
+  if (!textResponse || typeof textResponse !== "string") {
+    throw new Error("External AI returned empty response");
+  }
+  return textResponse;
+};
+
 const parseGeminiChatResponse = (
   textResponse: string,
   fallback: ChatRecommendationResponse,
-  excludedTitles: Set<string>
+  excludedTitles: Set<string>,
+  provider: ExternalProvider
 ): ChatRecommendationResponse => {
   const parsed = JSON.parse(extractJsonFromText(textResponse));
 
@@ -1061,7 +1164,7 @@ const parseGeminiChatResponse = (
     : fallback.extractedPreferences;
 
   return {
-    source: "gemini",
+    source: provider,
     reply: String(parsed?.reply || fallback.reply),
     recommendations:
       safeGeminiRecommendations.length > 0
@@ -1080,14 +1183,7 @@ const analyzeChatWithGemini = async (
   recentAssistantTitles: string[],
   wantsAlternatives: boolean
 ): Promise<ChatRecommendationResponse> => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-  const geminiApiUrl =
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
-
-  if (!geminiApiKey) {
-    throw new Error("GEMINI_API_KEY is not configured");
-  }
+  const provider = resolveExternalProvider();
 
   const prompt = buildGeminiChatPrompt({
     message: payload.message,
@@ -1100,40 +1196,16 @@ const analyzeChatWithGemini = async (
     wantsAlternatives,
   });
 
-  const response = await axios.post(
-    geminiApiUrl,
-    {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.45,
-        responseMimeType: "application/json",
-      },
-    },
-    {
-      params: {
-        key: geminiApiKey,
-      },
-      timeout: 12000,
-    }
-  );
+  const textResponse = await requestExternalJsonText(provider, prompt, 0.45, 12000);
 
-  const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!textResponse || typeof textResponse !== "string") {
-    throw new Error("Gemini returned empty response for chat recommendations");
-  }
-
-  return parseGeminiChatResponse(textResponse, fallback, excludedTitles);
+  return parseGeminiChatResponse(textResponse, fallback, excludedTitles, provider);
 };
 
 const parseGeminiInsights = (
   normalizedQuery: string,
   textResponse: string,
-  fallback: AnimeQueryInsights
+  fallback: AnimeQueryInsights,
+  provider: ExternalProvider
 ): AnimeQueryInsights => {
   const parsed = JSON.parse(extractJsonFromText(textResponse));
 
@@ -1175,52 +1247,19 @@ const parseGeminiInsights = (
     detectedGenres,
     sentimentHint,
     intent,
-    source: "gemini",
+    source: provider,
   };
 };
 
 const analyzeWithGemini = async (normalizedQuery: string): Promise<AnimeQueryInsights> => {
-  const geminiApiKey = process.env.GEMINI_API_KEY;
-  const geminiModel = process.env.GEMINI_MODEL || "gemini-1.5-flash";
-  const geminiApiUrl =
-    `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent`;
-
-  if (!geminiApiKey) {
-    throw new Error("GEMINI_API_KEY is not configured");
-  }
+  const provider = resolveExternalProvider();
 
   const prompt = buildGeminiPrompt(normalizedQuery);
   const fallback = buildFallbackInsights(normalizedQuery);
 
-  const response = await axios.post(
-    geminiApiUrl,
-    {
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: "application/json",
-      },
-    },
-    {
-      params: {
-        key: geminiApiKey,
-      },
-      timeout: 10000,
-    }
-  );
+  const textResponse = await requestExternalJsonText(provider, prompt, 0.2, 10000);
 
-  const textResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!textResponse || typeof textResponse !== "string") {
-    throw new Error("Gemini returned empty response");
-  }
-
-  return parseGeminiInsights(normalizedQuery, textResponse, fallback);
+  return parseGeminiInsights(normalizedQuery, textResponse, fallback, provider);
 };
 
 /**
@@ -1393,10 +1432,10 @@ export const getAnimeRecommendationChat = async (
   });
 
   const externalEnabled = process.env.AI_EXTERNAL_ENABLED === "true";
-  const hasGeminiApiKey = Boolean(process.env.GEMINI_API_KEY);
+  const hasExternalApiKey = Boolean(getExternalApiKey(resolveExternalProvider()));
 
   try {
-    if (externalEnabled && hasGeminiApiKey) {
+    if (externalEnabled && hasExternalApiKey) {
       const result = await analyzeChatWithGemini(
         payload,
         signals.snippets,
@@ -1412,8 +1451,8 @@ export const getAnimeRecommendationChat = async (
       return result;
     }
   } catch (error) {
-    console.error("Error contacting Gemini for recommendation chat:", error);
-    const fallbackWithReason = withFallbackReason(fallback, "gemini-error");
+    console.error("Error contacting external AI for recommendation chat:", error);
+    const fallbackWithReason = withFallbackReason(fallback, "external-error");
     if (canUseCache) {
       setCacheEntry(
         chatCache,
@@ -1428,9 +1467,9 @@ export const getAnimeRecommendationChat = async (
 
   const fallbackReason = !externalEnabled
     ? "external-disabled"
-    : !hasGeminiApiKey
+    : !hasExternalApiKey
       ? "missing-api-key"
-      : "gemini-error";
+      : "external-error";
 
   const fallbackWithReason = withFallbackReason(fallback, fallbackReason);
   if (canUseCache) {

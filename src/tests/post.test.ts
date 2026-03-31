@@ -151,26 +151,22 @@ describe("Post Endpoints", () => {
     expect(res.body).toHaveProperty("message", "Search query is required");
   });
 
-  it("should use Gemini provider for intelligent search when enabled", async () => {
+  it("should use Groq provider for intelligent search when enabled", async () => {
     process.env.AI_EXTERNAL_ENABLED = "true";
-    process.env.GEMINI_API_KEY = "test-gemini-key";
+    process.env.GROQ_API_KEY = "test-groq-key";
 
     mockedAxios.post.mockResolvedValueOnce({
       data: {
-        candidates: [
+        choices: [
           {
-            content: {
-              parts: [
-                {
-                  text: JSON.stringify({
-                    keywords: ["attack", "titan", "dark"],
-                    detectedAnimeTitles: ["attack on titan"],
-                    detectedGenres: ["action", "drama"],
-                    sentimentHint: "positive",
-                    intent: "analysis",
-                  }),
-                },
-              ],
+            message: {
+              content: JSON.stringify({
+                keywords: ["attack", "titan", "dark"],
+                detectedAnimeTitles: ["attack on titan"],
+                detectedGenres: ["action", "drama"],
+                sentimentHint: "positive",
+                intent: "analysis",
+              }),
             },
           },
         ],
@@ -187,15 +183,15 @@ describe("Post Endpoints", () => {
       .query({ q: "analyze attack on titan dark themes" });
 
     expect(res.status).toBe(200);
-    expect(res.body.ai).toHaveProperty("source", "gemini");
+    expect(res.body.ai).toHaveProperty("source", "groq");
     expect(res.body.ai).toHaveProperty("intent", "analysis");
     expect(res.body.ai.detectedAnimeTitles).toContain("attack on titan");
     expect(mockedAxios.post).toHaveBeenCalledWith(
-      expect.stringContaining("generativelanguage.googleapis.com"),
+      expect.stringContaining("api.groq.com/openai/v1/chat/completions"),
       expect.any(Object),
       expect.objectContaining({
-        params: expect.objectContaining({
-          key: "test-gemini-key",
+        headers: expect.objectContaining({
+          Authorization: "Bearer test-groq-key",
         }),
       })
     );
