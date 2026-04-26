@@ -3,6 +3,12 @@ import User, { IUser } from "../models/user.model";
 import { AuthRequest } from "../middleware/auth.middleware";
 import Post from "../models/post.model";
 
+const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 3000}`;
+
+const getImageUrl = (relativePath: string): string => {
+  return `${API_URL}${relativePath}`;
+};
+
 /**
  * Get all users
  */
@@ -56,7 +62,7 @@ export const updateUser = async (req: AuthRequest, res: Response): Promise<void>
       updateData.username = username;
     }
     if (req.file) {
-      updateData.profileImage = `/uploads/profiles/${req.file.filename}`;
+      updateData.profileImage = getImageUrl(`/uploads/profiles/${req.file.filename}`);
     }
 
     const updatedUser = await User.findByIdAndUpdate(userId, updateData, {

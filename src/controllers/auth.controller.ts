@@ -11,6 +11,7 @@ const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID;
 const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
+const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 3000}`;
 
 if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
   throw new Error(
@@ -20,6 +21,10 @@ if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
 
 const ACCESS_TOKEN_EXPIRATION = "15m";
 const REFRESH_TOKEN_EXPIRATION = "7d";
+
+const getImageUrl = (relativePath: string): string => {
+  return `${API_URL}${relativePath}`;
+};
 
 type Provider = "google" | "facebook";
 
@@ -64,7 +69,7 @@ const persistExternalProfileImage = async (
   }
 
   if (imageUrl.startsWith("/uploads/")) {
-    return imageUrl;
+    return getImageUrl(imageUrl);
   }
 
   if (!/^https?:\/\//i.test(imageUrl)) {
@@ -89,7 +94,7 @@ const persistExternalProfileImage = async (
 
     fs.writeFileSync(targetPath, Buffer.from(response.data));
 
-    return `/uploads/profiles/${filename}`;
+    return getImageUrl(`/uploads/profiles/${filename}`);
   } catch (error) {
     console.warn("Could not persist external social profile image", error);
     return "";
