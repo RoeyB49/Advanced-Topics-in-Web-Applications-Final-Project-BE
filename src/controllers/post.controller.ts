@@ -5,12 +5,6 @@ import { searchPosts as searchPostsWithAI } from "../services/ai.service";
 import { searchPostsWithInsights } from "../services/ai.service";
 import Comment from "../models/comment.model";
 
-const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 3000}`;
-
-const getImageUrl = (relativePath: string): string => {
-  return `${API_URL}${relativePath}`;
-};
-
 /**
  * @swagger
  * /api/posts:
@@ -155,7 +149,7 @@ export const createPost = async (
 
     const postData: any = { text, author };
     if (req.file) {
-      postData.imageUrl = getImageUrl(`/uploads/posts/${req.file.filename}`);
+      postData.imageUrl = `/uploads/posts/${req.file.filename}`;
     }
 
     const post = new Post(postData);
@@ -264,7 +258,7 @@ export const updatePost = async (
 
     post.text = text || post.text;
     if (req.file) {
-      post.imageUrl = getImageUrl(`/uploads/posts/${req.file.filename}`);
+      post.imageUrl = `/uploads/posts/${req.file.filename}`;
     }
 
     const updatedPost = await post.save();
