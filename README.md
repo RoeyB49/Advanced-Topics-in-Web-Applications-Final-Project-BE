@@ -1,45 +1,30 @@
 # Advanced Topics in Web Applications – Final Project (BE)
 
-Backend service for our final project.  
-This repository contains the server-side API, business logic, authentication flow, and database integration used by the application.
+Backend API for a social platform with AI-powered anime recommendations.
 
-## What we built
+## Features
 
-- A backend API for the project’s core features
-- User authentication and authorization
-- Data persistence and database modeling
-- Input validation and error handling
-- Structured project architecture for scalability and maintenance
+- **Authentication** – User signup, login, and JWT-based authorization
+- **Posts & Comments** – Create, read, update posts and add comments
+- **File Uploads** – Profile and post image uploads
+- **AI Recommendations** – Groq-powered anime recommendations using community signals
+- **Testing** – Full test coverage with Jest
 
-## Tech stack
+## Tech Stack
 
-- Node.js
+- Node.js, TypeScript
 - Express
-- [Your DB here]
-- [Any additional tools/libraries you used]
+- MongoDB
+- Groq AI
 
-## Project status
-
-Core backend functionality is implemented and working.  
-Additional polishing, documentation improvements, and UI/screenshots will be added later.
-
-## Run locally
-
-1. Clone the repo
-2. Install dependencies
-3. Create `.env` file
-4. Start the server
-
-Example:
+## Get Started
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Notes
-
-- Environment variables are required (`.env`)
+**Note:** Create a `.env` file with required environment variables (see AI config section below)
 
 ## AI advisor configuration
 
@@ -74,11 +59,3 @@ Authenticated endpoint:
 
 - `GET /api/ai/recommendations/metrics`
 - `POST /api/ai/recommendations/metrics/reset` (admin only)
-
-Returns an in-memory snapshot with:
-
-- total chat requests
-- external provider usage percentage
-- fallback reason counters
-- recommendation repetition rate
-- catalog size and last successful catalog load time
